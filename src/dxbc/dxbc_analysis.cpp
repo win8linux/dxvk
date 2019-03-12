@@ -4,12 +4,14 @@ namespace dxvk {
   
   DxbcAnalyzer::DxbcAnalyzer(
     const DxbcModuleInfo&     moduleInfo,
-    const DxbcProgramVersion& version,
+    const DxbcProgramInfo&    programInfo,
     const Rc<DxbcIsgn>&       isgn,
     const Rc<DxbcIsgn>&       osgn,
+    const Rc<DxbcIsgn>&       psgn,
           DxbcAnalysisInfo&   analysis)
   : m_isgn    (isgn),
     m_osgn    (osgn),
+    m_psgn    (psgn),
     m_analysis(&analysis) {
     // Get number of clipping and culling planes from the
     // input and output signatures. We will need this to

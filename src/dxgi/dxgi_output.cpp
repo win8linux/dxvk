@@ -19,21 +19,19 @@ namespace dxvk {
               HMONITOR      monitor)
   : m_adapter(adapter),
     m_monitor(monitor) {
-    // Init output data if necessary
-    if (FAILED(m_adapter->GetOutputData(m_monitor, nullptr))) {
-      DXGI_VK_OUTPUT_DATA outputData;
-      outputData.FrameStats = DXGI_FRAME_STATISTICS();
-      outputData.GammaCurve.Scale  = { 1.0f, 1.0f, 1.0f };
-      outputData.GammaCurve.Offset = { 0.0f, 0.0f, 0.0f };
-      
-      for (uint32_t i = 0; i < DXGI_VK_GAMMA_CP_COUNT; i++) {
-        const float value = GammaControlPointLocation(i);
-        outputData.GammaCurve.GammaCurve[i] = { value, value, value };
-      }
-      
-      outputData.GammaDirty = FALSE;
-      m_adapter->SetOutputData(m_monitor, &outputData);
+    // Init monitor info if necessary
+    DXGI_VK_MONITOR_DATA monitorData;
+    monitorData.pSwapChain = nullptr;
+    monitorData.FrameStats = DXGI_FRAME_STATISTICS();
+    monitorData.GammaCurve.Scale  = { 1.0f, 1.0f, 1.0f };
+    monitorData.GammaCurve.Offset = { 0.0f, 0.0f, 0.0f };
+    
+    for (uint32_t i = 0; i < DXGI_VK_GAMMA_CP_COUNT; i++) {
+      const float value = GammaControlPointLocation(i);
+      monitorData.GammaCurve.GammaCurve[i] = { value, value, value };
     }
+    
+    InitMonitorData(monitor, &monitorData);    
   }
   
   
@@ -43,11 +41,18 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE DxgiOutput::QueryInterface(REFIID riid, void** ppvObject) {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+
     *ppvObject = nullptr;
     
     if (riid == __uuidof(IUnknown)
      || riid == __uuidof(IDXGIObject)
-     || riid == __uuidof(IDXGIOutput)) {
+     || riid == __uuidof(IDXGIOutput)
+     || riid == __uuidof(IDXGIOutput1)
+     || riid == __uuidof(IDXGIOutput2)
+     || riid == __uuidof(IDXGIOutput3)
+     || riid == __uuidof(IDXGIOutput4)) {
       *ppvObject = ref(this);
       return S_OK;
     }
@@ -67,10 +72,44 @@ namespace dxvk {
     const DXGI_MODE_DESC *pModeToMatch,
           DXGI_MODE_DESC *pClosestMatch,
           IUnknown       *pConcernedDevice) {
-    if (pModeToMatch == nullptr || pClosestMatch == nullptr)
+    if (!pModeToMatch || !pClosestMatch)
+      return DXGI_ERROR_INVALID_CALL;
+    
+    DXGI_MODE_DESC1 modeToMatch;
+    modeToMatch.Width            = pModeToMatch->Width;
+    modeToMatch.Height           = pModeToMatch->Height;
+    modeToMatch.RefreshRate      = pModeToMatch->RefreshRate;
+    modeToMatch.Format           = pModeToMatch->Format;
+    modeToMatch.ScanlineOrdering = pModeToMatch->ScanlineOrdering;
+    modeToMatch.Scaling          = pModeToMatch->Scaling;
+    modeToMatch.Stereo           = FALSE;
+
+    DXGI_MODE_DESC1 closestMatch = { };
+
+    HRESULT hr = FindClosestMatchingMode1(
+      &modeToMatch, &closestMatch, pConcernedDevice);
+    
+    if (FAILED(hr))
+      return hr;
+    
+    pClosestMatch->Width            = closestMatch.Width;
+    pClosestMatch->Height           = closestMatch.Height;
+    pClosestMatch->RefreshRate      = closestMatch.RefreshRate;
+    pClosestMatch->Format           = closestMatch.Format;
+    pClosestMatch->ScanlineOrdering = closestMatch.ScanlineOrdering;
+    pClosestMatch->Scaling          = closestMatch.Scaling;
+    return hr;
+  }
+  
+  
+  HRESULT STDMETHODCALLTYPE DxgiOutput::FindClosestMatchingMode1(
+    const DXGI_MODE_DESC1*      pModeToMatch,
+          DXGI_MODE_DESC1*      pClosestMatch,
+          IUnknown*             pConcernedDevice) {
+    if (!pModeToMatch || !pClosestMatch)
       return DXGI_ERROR_INVALID_CALL;
 
-    if (pModeToMatch->Format == DXGI_FORMAT_UNKNOWN && pConcernedDevice == nullptr)
+    if (pModeToMatch->Format == DXGI_FORMAT_UNKNOWN && !pConcernedDevice)
       return DXGI_ERROR_INVALID_CALL;
     
     // If no format was specified, fall back to a standard
@@ -90,15 +129,15 @@ namespace dxvk {
     // List all supported modes and filter
     // out those we don't actually need
     UINT modeCount = 0;
-    GetDisplayModeList(targetFormat, DXGI_ENUM_MODES_SCALING, &modeCount, nullptr);
+    GetDisplayModeList1(targetFormat, DXGI_ENUM_MODES_SCALING, &modeCount, nullptr);
     
     if (modeCount == 0) {
       Logger::err("DXGI: FindClosestMatchingMode: No modes found");
       return DXGI_ERROR_NOT_FOUND;
     }
 
-    std::vector<DXGI_MODE_DESC> modes(modeCount);
-    GetDisplayModeList(targetFormat, DXGI_ENUM_MODES_SCALING, &modeCount, modes.data());
+    std::vector<DXGI_MODE_DESC1> modes(modeCount);
+    GetDisplayModeList1(targetFormat, DXGI_ENUM_MODES_SCALING, &modeCount, modes.data());
     
     for (auto it = modes.begin(); it != modes.end(); ) {
       bool skipMode = false;
@@ -114,6 +153,9 @@ namespace dxvk {
       if (pModeToMatch->Scaling != DXGI_MODE_SCALING_UNSPECIFIED)
         skipMode |= it->Scaling != pModeToMatch->Scaling;
       
+      // Remove modes with incorrect stereo mode
+      skipMode |= it->Stereo != pModeToMatch->Stereo;
+      
       it = skipMode ? modes.erase(it) : ++it;
     }
     
@@ -128,7 +170,8 @@ namespace dxvk {
 
     if (targetWidth == 0 || targetHeight == 0) {
       DXGI_MODE_DESC activeMode = { };
-      GetDisplayMode(&activeMode, ENUM_CURRENT_SETTINGS);
+      GetMonitorDisplayMode(m_monitor,
+        ENUM_CURRENT_SETTINGS, &activeMode);
 
       targetWidth  = activeMode.Width;
       targetHeight = activeMode.Height;
@@ -149,8 +192,8 @@ namespace dxvk {
 
     return S_OK;
   }
-  
-  
+
+
   HRESULT STDMETHODCALLTYPE DxgiOutput::GetDesc(DXGI_OUTPUT_DESC *pDesc) {
     if (pDesc == nullptr)
       return DXGI_ERROR_INVALID_CALL;
@@ -176,8 +219,38 @@ namespace dxvk {
   HRESULT STDMETHODCALLTYPE DxgiOutput::GetDisplayModeList(
           DXGI_FORMAT    EnumFormat,
           UINT           Flags,
-          UINT           *pNumModes,
-          DXGI_MODE_DESC *pDesc) {
+          UINT*          pNumModes,
+          DXGI_MODE_DESC* pDesc) {
+    if (pNumModes == nullptr)
+      return DXGI_ERROR_INVALID_CALL;
+    
+    std::vector<DXGI_MODE_DESC1> modes;
+
+    if (pDesc)
+      modes.resize(*pNumModes);
+    
+    HRESULT hr = GetDisplayModeList1(
+      EnumFormat, Flags, pNumModes,
+      pDesc ? modes.data() : nullptr);
+    
+    for (uint32_t i = 0; i < *pNumModes && i < modes.size(); i++) {
+      pDesc[i].Width            = modes[i].Width;
+      pDesc[i].Height           = modes[i].Height;
+      pDesc[i].RefreshRate      = modes[i].RefreshRate;
+      pDesc[i].Format           = modes[i].Format;
+      pDesc[i].ScanlineOrdering = modes[i].ScanlineOrdering;
+      pDesc[i].Scaling          = modes[i].Scaling;
+    }
+    
+    return hr;
+  }
+  
+  
+  HRESULT STDMETHODCALLTYPE DxgiOutput::GetDisplayModeList1(
+          DXGI_FORMAT           EnumFormat,
+          UINT                  Flags,
+          UINT*                 pNumModes,
+          DXGI_MODE_DESC1*      pDesc) {
     if (pNumModes == nullptr)
       return DXGI_ERROR_INVALID_CALL;
     
@@ -197,7 +270,7 @@ namespace dxvk {
     uint32_t srcModeId = 0;
     uint32_t dstModeId = 0;
     
-    std::vector<DXGI_MODE_DESC> modeList;
+    std::vector<DXGI_MODE_DESC1> modeList;
     
     while (::EnumDisplaySettingsW(monInfo.szDevice, srcModeId++, &devMode)) {
       // Skip interlaced modes altogether
@@ -205,17 +278,18 @@ namespace dxvk {
         continue;
       
       // Skip modes with incompatible formats
-      if (devMode.dmBitsPerPel != GetFormatBpp(EnumFormat))
+      if (devMode.dmBitsPerPel != GetMonitorFormatBpp(EnumFormat))
         continue;
       
       if (pDesc != nullptr) {
-        DXGI_MODE_DESC mode;
+        DXGI_MODE_DESC1 mode;
         mode.Width            = devMode.dmPelsWidth;
         mode.Height           = devMode.dmPelsHeight;
         mode.RefreshRate      = { devMode.dmDisplayFrequency * 1000, 1000 };
         mode.Format           = EnumFormat;
         mode.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE;
         mode.Scaling          = DXGI_MODE_SCALING_UNSPECIFIED;
+        mode.Stereo           = FALSE;
         modeList.push_back(mode);
       }
       
@@ -225,7 +299,7 @@ namespace dxvk {
     // Sort display modes by width, height and refresh rate,
     // in that order. Some games rely on correct ordering.
     std::sort(modeList.begin(), modeList.end(),
-      [] (const DXGI_MODE_DESC& a, const DXGI_MODE_DESC& b) {
+      [] (const DXGI_MODE_DESC1& a, const DXGI_MODE_DESC1& b) {
         if (a.Width < b.Width) return true;
         if (a.Width > b.Width) return false;
         
@@ -249,8 +323,8 @@ namespace dxvk {
     *pNumModes = dstModeId;
     return S_OK;
   }
-  
-  
+
+
   HRESULT STDMETHODCALLTYPE DxgiOutput::GetDisplaySurfaceData(IDXGISurface* pDestination) {
     Logger::err("DxgiOutput::GetDisplaySurfaceData: Not implemented");
     return E_NOTIMPL;
@@ -258,27 +332,27 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE DxgiOutput::GetFrameStatistics(DXGI_FRAME_STATISTICS* pStats) {
-    DXGI_VK_OUTPUT_DATA outputData;
+    DXGI_VK_MONITOR_DATA* monitorInfo = nullptr;
+    HRESULT hr = AcquireMonitorData(m_monitor, &monitorInfo);
+
+    if (FAILED(hr))
+      return hr;
     
-    if (FAILED(m_adapter->GetOutputData(m_monitor, &outputData))) {
-      Logger::err("DXGI: Failed to query output data");
-      return E_FAIL;
-    }
-    
-    *pStats = outputData.FrameStats;
+    *pStats = monitorInfo->FrameStats;
+    ReleaseMonitorData();
     return S_OK;
   }
   
   
   HRESULT STDMETHODCALLTYPE DxgiOutput::GetGammaControl(DXGI_GAMMA_CONTROL* pArray) {
-    DXGI_VK_OUTPUT_DATA outputData;
+    DXGI_VK_MONITOR_DATA* monitorInfo = nullptr;
+    HRESULT hr = AcquireMonitorData(m_monitor, &monitorInfo);
+
+    if (FAILED(hr))
+      return hr;
     
-    if (FAILED(m_adapter->GetOutputData(m_monitor, &outputData))) {
-      Logger::err("DXGI: Failed to query output data");
-      return E_FAIL;
-    }
-    
-    *pArray = outputData.GammaCurve;
+    *pArray = monitorInfo->GammaCurve;
+    ReleaseMonitorData();
     return S_OK;
   }
   
@@ -304,23 +378,30 @@ namespace dxvk {
     Logger::err("DxgiOutput::SetDisplaySurface: Not implemented");
     return E_NOTIMPL;
   }
+
+
+  HRESULT STDMETHODCALLTYPE DxgiOutput::GetDisplaySurfaceData1(IDXGIResource* pDestination) {
+    Logger::err("DxgiOutput::SetDisplaySurface1: Not implemented");
+    return E_NOTIMPL;
+  }
   
   
   HRESULT STDMETHODCALLTYPE DxgiOutput::SetGammaControl(const DXGI_GAMMA_CONTROL* pArray) {
-    DXGI_VK_OUTPUT_DATA outputData;
+    DXGI_VK_MONITOR_DATA* monitorInfo = nullptr;
+    HRESULT hr = AcquireMonitorData(m_monitor, &monitorInfo);
+
+    if (FAILED(hr))
+      return hr;
     
-    if (FAILED(m_adapter->GetOutputData(m_monitor, &outputData))) {
-      Logger::err("DXGI: Failed to query output data");
-      return E_FAIL;
+    monitorInfo->GammaCurve = *pArray;
+
+    if (monitorInfo->pSwapChain) {
+      hr = monitorInfo->pSwapChain->SetGammaControl(
+        DXGI_VK_GAMMA_CP_COUNT, pArray->GammaCurve);
     }
-    
-    outputData.GammaCurve = *pArray;
-    outputData.GammaDirty = TRUE;
-    
-    if (FAILED(m_adapter->SetOutputData(m_monitor, &outputData))) {
-      Logger::err("DXGI: Failed to update output data");
-      return E_FAIL;
-    } return S_OK;
+
+    ReleaseMonitorData();
+    return hr;
   }
   
   
@@ -333,72 +414,47 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE DxgiOutput::WaitForVBlank() {
-    Logger::warn("DxgiOutput::WaitForVBlank: Stub");
+    static bool s_errorShown = false;
+
+    if (!std::exchange(s_errorShown, true))
+      Logger::warn("DxgiOutput::WaitForVBlank: Stub");
     return S_OK;
   }
   
   
-  HRESULT DxgiOutput::GetDisplayMode(DXGI_MODE_DESC* pMode, DWORD ModeNum) {
-    ::MONITORINFOEXW monInfo;
-    monInfo.cbSize = sizeof(monInfo);
+  HRESULT STDMETHODCALLTYPE DxgiOutput::DuplicateOutput(
+          IUnknown*                 pDevice,
+          IDXGIOutputDuplication**  ppOutputDuplication) {
+    static bool s_errorShown = false;
 
-    if (!::GetMonitorInfoW(m_monitor, reinterpret_cast<MONITORINFO*>(&monInfo))) {
-      Logger::err("DXGI: Failed to query monitor info");
-      return E_FAIL;
-    }
+    if (!std::exchange(s_errorShown, true))
+      Logger::warn("DxgiOutput::DuplicateOutput: Stub");
     
-    DEVMODEW devMode = { };
-    devMode.dmSize = sizeof(devMode);
-    
-    if (!::EnumDisplaySettingsW(monInfo.szDevice, ModeNum, &devMode))
-      return DXGI_ERROR_NOT_FOUND;
-    
-    pMode->Width            = devMode.dmPelsWidth;
-    pMode->Height           = devMode.dmPelsHeight;
-    pMode->RefreshRate      = { devMode.dmDisplayFrequency, 1 };
-    pMode->Format           = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; // FIXME
-    pMode->ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE;
-    pMode->Scaling          = DXGI_MODE_SCALING_UNSPECIFIED;
-    return S_OK;
+    return E_NOTIMPL;
   }
-  
-    
-  HRESULT DxgiOutput::SetDisplayMode(const DXGI_MODE_DESC* pMode) {
-    ::MONITORINFOEXW monInfo;
-    monInfo.cbSize = sizeof(monInfo);
 
-    if (!::GetMonitorInfoW(m_monitor, reinterpret_cast<MONITORINFO*>(&monInfo))) {
-      Logger::err("DXGI: Failed to query monitor info");
-      return E_FAIL;
-    }
-    
-    DEVMODEW devMode = { };
-    devMode.dmSize       = sizeof(devMode);
-    devMode.dmFields     = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
-    devMode.dmPelsWidth  = pMode->Width;
-    devMode.dmPelsHeight = pMode->Height;
-    devMode.dmBitsPerPel = GetFormatBpp(pMode->Format);
-    
-    if (pMode->RefreshRate.Numerator != 0)  {
-      devMode.dmFields |= DM_DISPLAYFREQUENCY;
-      devMode.dmDisplayFrequency = pMode->RefreshRate.Numerator
-                                 / pMode->RefreshRate.Denominator;
-    }
-    
-    Logger::info(str::format("DXGI: Setting display mode: ",
-      devMode.dmPelsWidth, "x", devMode.dmPelsHeight, "@",
-      devMode.dmDisplayFrequency));
-    
-    LONG status = ::ChangeDisplaySettingsExW(
-      monInfo.szDevice, &devMode, nullptr, CDS_FULLSCREEN, nullptr);
-    
-    return status == DISP_CHANGE_SUCCESSFUL ? S_OK : DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;;
+
+  BOOL DxgiOutput::SupportsOverlays() {
+    return FALSE;
   }
-  
-  
-  uint32_t DxgiOutput::GetFormatBpp(DXGI_FORMAT Format) const {
-    DXGI_VK_FORMAT_INFO formatInfo = m_adapter->LookupFormat(Format, DXGI_VK_FORMAT_MODE_ANY);
-    return imageFormatInfo(formatInfo.Format)->elementSize * 8;
+
+
+  HRESULT STDMETHODCALLTYPE DxgiOutput::CheckOverlaySupport(
+          DXGI_FORMAT EnumFormat,
+          IUnknown*   pConcernedDevice,
+          UINT*       pFlags) {
+    Logger::warn("DxgiOutput: CheckOverlaySupport: Stub");
+    return DXGI_ERROR_UNSUPPORTED;
+  }
+
+
+  HRESULT STDMETHODCALLTYPE DxgiOutput::CheckOverlayColorSpaceSupport(
+          DXGI_FORMAT           Format,
+          DXGI_COLOR_SPACE_TYPE ColorSpace,
+          IUnknown*             pConcernedDevice,
+          UINT*                 pFlags) {
+    Logger::warn("DxgiOutput: CheckOverlayColorSpaceSupport: Stub");
+    return DXGI_ERROR_UNSUPPORTED;
   }
   
 }

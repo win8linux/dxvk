@@ -1,4 +1,3 @@
-#include "dxgi_device.h"
 #include "dxgi_factory.h"
 #include "dxgi_output.h"
 #include "dxgi_swapchain.h"
@@ -6,36 +5,17 @@
 namespace dxvk {
   
   DxgiSwapChain::DxgiSwapChain(
-          DxgiFactory*                pFactory,
-          IUnknown*                   pDevice,
+          IDXGIFactory*               pFactory,
+          IDXGIVkSwapChain*           pPresenter,
           HWND                        hWnd,
     const DXGI_SWAP_CHAIN_DESC1*      pDesc,
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc)
-  : m_factory (pFactory),
-    m_window  (hWnd),
-    m_desc    (*pDesc),
-    m_descFs  (*pFullscreenDesc),
-    m_monitor (nullptr) {
-    // Retrieve a device pointer that allows us to
-    // communicate with the underlying D3D device
-    if (FAILED(pDevice->QueryInterface(__uuidof(IDXGIVkPresenter),
-        reinterpret_cast<void**>(&m_presentDevice))))
-      throw DxvkError("DXGI: DxgiSwapChain: Invalid device");
-    
-    // Retrieve the adapter, which is going
-    // to be used to enumerate displays.
-    Com<IDXGIDevice> device;
-    Com<IDXGIAdapter> adapter;
-    
-    if (FAILED(pDevice->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&device))))
-      throw DxvkError("DXGI: DxgiSwapChain: Invalid device");
-    
-    if (FAILED(device->GetAdapter(&adapter)))
-      throw DxvkError("DXGI: DxgiSwapChain: Failed to retrieve adapter");
-    
-    m_device  = static_cast<DxgiDevice*>(device.ptr());
-    m_adapter = static_cast<DxgiAdapter*>(adapter.ptr());
-    
+  : m_factory   (pFactory),
+    m_window    (hWnd),
+    m_desc      (*pDesc),
+    m_descFs    (*pFullscreenDesc),
+    m_presenter (pPresenter),
+    m_monitor   (nullptr) {
     // Initialize frame statistics
     m_stats.PresentCount         = 0;
     m_stats.PresentRefreshCount  = 0;
@@ -43,41 +23,43 @@ namespace dxvk {
     m_stats.SyncQPCTime.QuadPart = 0;
     m_stats.SyncGPUTime.QuadPart = 0;
     
-    // Adjust initial back buffer size. If zero, these
-    // shall be set to the current window size.
-    const VkExtent2D windowSize = GetWindowSize();
+    if (FAILED(m_presenter->GetAdapter(__uuidof(IDXGIAdapter), reinterpret_cast<void**>(&m_adapter))))
+      throw DxvkError("DXGI: Failed to get adapter for present device");
     
-    if (m_desc.Width  == 0) m_desc.Width  = windowSize.width;
-    if (m_desc.Height == 0) m_desc.Height = windowSize.height;
-    
-    // Set initial window mode and fullscreen state
+    // Apply initial window mode and fullscreen state
     if (!m_descFs.Windowed && FAILED(EnterFullscreenMode(nullptr)))
-      throw DxvkError("DXGI: DxgiSwapChain: Failed to set initial fullscreen state");
-    
-    if (FAILED(CreatePresenter()) || FAILED(CreateBackBuffer()))
-      throw DxvkError("DXGI: DxgiSwapChain: Failed to create presenter or back buffer");
-    
-    if (FAILED(SetDefaultGammaControl()))
-      throw DxvkError("DXGI: DxgiSwapChain: Failed to set up gamma ramp");
+      throw DxvkError("DXGI: Failed to set initial fullscreen state");
   }
   
   
   DxgiSwapChain::~DxgiSwapChain() {
-    Com<IDXGIOutput> output;
+    RestoreDisplayMode(m_monitor);
+
+    // Decouple swap chain from monitor if necessary
+    DXGI_VK_MONITOR_DATA* monitorInfo = nullptr;
     
-    if (SUCCEEDED(m_adapter->GetOutputFromMonitor(m_monitor, &output)))
-      RestoreDisplayMode(output.ptr());
+    if (SUCCEEDED(AcquireMonitorData(m_monitor, &monitorInfo))) {
+      if (monitorInfo->pSwapChain == this)
+        monitorInfo->pSwapChain = nullptr;
+      
+      ReleaseMonitorData();
+    }
   }
   
   
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::QueryInterface(REFIID riid, void** ppvObject) {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+
     *ppvObject = nullptr;
     
     if (riid == __uuidof(IUnknown)
      || riid == __uuidof(IDXGIObject)
      || riid == __uuidof(IDXGIDeviceSubObject)
      || riid == __uuidof(IDXGISwapChain)
-     || riid == __uuidof(IDXGISwapChain1)) {
+     || riid == __uuidof(IDXGISwapChain1)
+     || riid == __uuidof(IDXGISwapChain2)
+     || riid == __uuidof(IDXGISwapChain3)) {
       *ppvObject = ref(this);
       return S_OK;
     }
@@ -94,23 +76,17 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::GetDevice(REFIID riid, void** ppDevice) {
-    return m_device->QueryInterface(riid, ppDevice);
+    return m_presenter->GetDevice(riid, ppDevice);
   }
   
   
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::GetBuffer(UINT Buffer, REFIID riid, void** ppSurface) {
-    InitReturnPtr(ppSurface);
+    return m_presenter->GetImage(Buffer, riid, ppSurface);
+  }
 
-    if (!IsWindow(m_window))
-      return DXGI_ERROR_INVALID_CALL;
-    
-    if (Buffer > 0) {
-      Logger::err("DxgiSwapChain::GetBuffer: Buffer > 0 not supported");
-      return DXGI_ERROR_INVALID_CALL;
-    }
-    
-    std::lock_guard<std::mutex> lock(m_lockBuffer);
-    return m_backBuffer->QueryInterface(riid, ppSurface);
+
+  UINT STDMETHODCALLTYPE DxgiSwapChain::GetCurrentBackBufferIndex() {
+    return m_presenter->GetImageIndex();
   }
   
   
@@ -128,7 +104,7 @@ namespace dxvk {
         (windowRect.top + windowRect.bottom) / 2 },
       MONITOR_DEFAULTTOPRIMARY);
     
-    return m_adapter->GetOutputFromMonitor(monitor, ppOutput);
+    return GetOutputFromMonitor(monitor, ppOutput);
   }
   
   
@@ -209,7 +185,7 @@ namespace dxvk {
       *ppTarget = nullptr;
       
       if (!m_descFs.Windowed)
-        hr = m_adapter->GetOutputFromMonitor(m_monitor, ppTarget);
+        hr = GetOutputFromMonitor(m_monitor, ppTarget);
     }
     
     return hr;
@@ -263,61 +239,7 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::Present(UINT SyncInterval, UINT Flags) {
-    if (!IsWindow(m_window))
-      return DXGI_ERROR_INVALID_CALL;
-    
-    if (Flags & DXGI_PRESENT_TEST)
-      return S_OK;
-    
-    std::lock_guard<std::mutex> lockWin(m_lockWindow);
-    std::lock_guard<std::mutex> lockBuf(m_lockBuffer);
-
-    // We'll apply certainl user options to the presenter
-    const DxgiOptions* options = m_factory->GetOptions();
-
-    // Retrieve the number of back buffers. If this option
-    // was defined by the user, it overrides app settings.
-    uint32_t bufferCount = m_desc.BufferCount;
-
-    if (options->numBackBuffers > 0)
-      bufferCount = options->numBackBuffers;
-
-    // Higher values are not allowed according to the Microsoft documentation:
-    // 
-    //   "1 through 4 - Synchronize presentation after the nth vertical blank."
-    //   https://msdn.microsoft.com/en-us/library/windows/desktop/bb174576(v=vs.85).aspx
-    SyncInterval = std::min<UINT>(SyncInterval, 4);
-
-    if (options->syncInterval >= 0)
-      SyncInterval = options->syncInterval;
-
-    try {
-      // If in fullscreen mode, apply any updated gamma curve
-      // if it has been changed since the last present call.
-      DXGI_VK_OUTPUT_DATA outputData;
-      
-      if (SUCCEEDED(m_adapter->GetOutputData(m_monitor, &outputData)) && outputData.GammaDirty) {
-        SetGammaControl(&outputData.GammaCurve);
-        
-        outputData.GammaDirty = FALSE;
-        m_adapter->SetOutputData(m_monitor, &outputData);
-      }
-      
-      // Submit pending rendering commands
-      // before recording the present code.
-      m_presentDevice->FlushRenderingCommands();
-
-      // Update swap chain properties. This will not only set
-      // up vertical synchronization properly, but also apply
-      // changes that were made to the window size even if the
-      // Vulkan swap chain itself remains valid.
-      m_presenter->RecreateSwapchain(m_desc.Format, SyncInterval != 0, GetWindowSize(), bufferCount);
-      m_presenter->PresentImage(SyncInterval, m_device->GetFrameSyncEvent());
-      return S_OK;
-    } catch (const DxvkError& err) {
-      Logger::err(err.message());
-      return DXGI_ERROR_DRIVER_INTERNAL_ERROR;
-    }
+    return Present1(SyncInterval, Flags, nullptr);
   }
   
   
@@ -325,10 +247,27 @@ namespace dxvk {
           UINT                      SyncInterval,
           UINT                      PresentFlags,
     const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {
-    if (pPresentParameters != nullptr)
-      Logger::warn("DXGI: Present parameters not supported");
+    if (!IsWindow(m_window))
+      return DXGI_ERROR_INVALID_CALL;
     
-    return Present(SyncInterval, PresentFlags);
+    if (PresentFlags & DXGI_PRESENT_TEST)
+      return S_OK;
+    
+    std::lock_guard<std::mutex> lockWin(m_lockWindow);
+    std::lock_guard<std::mutex> lockBuf(m_lockBuffer);
+
+    // Higher values are not allowed according to the Microsoft documentation:
+    // 
+    //   "1 through 4 - Synchronize presentation after the nth vertical blank."
+    //   https://msdn.microsoft.com/en-us/library/windows/desktop/bb174576(v=vs.85).aspx
+    SyncInterval = std::min<UINT>(SyncInterval, 4);
+
+    try {
+      return m_presenter->Present(SyncInterval, PresentFlags, nullptr);
+    } catch (const DxvkError& err) {
+      Logger::err(err.message());
+      return DXGI_ERROR_DRIVER_INTERNAL_ERROR;
+    }
   }
   
   
@@ -341,11 +280,13 @@ namespace dxvk {
     if (!IsWindow(m_window))
       return DXGI_ERROR_INVALID_CALL;
     
-    const VkExtent2D windowSize = GetWindowSize();
-    
     std::lock_guard<std::mutex> lock(m_lockBuffer);
-    m_desc.Width  = Width  != 0 ? Width  : windowSize.width;
-    m_desc.Height = Height != 0 ? Height : windowSize.height;
+    m_desc.Width  = Width;
+    m_desc.Height = Height;
+    
+    GetWindowClientSize(m_window,
+      m_desc.Width  ? nullptr : &m_desc.Width,
+      m_desc.Height ? nullptr : &m_desc.Height);
     
     if (BufferCount != 0)
       m_desc.BufferCount = BufferCount;
@@ -353,10 +294,28 @@ namespace dxvk {
     if (NewFormat != DXGI_FORMAT_UNKNOWN)
       m_desc.Format = NewFormat;
     
-    return CreateBackBuffer();
+    return m_presenter->ChangeProperties(&m_desc);
   }
   
   
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::ResizeBuffers1(
+          UINT                      BufferCount,
+          UINT                      Width,
+          UINT                      Height,
+          DXGI_FORMAT               Format,
+          UINT                      SwapChainFlags,
+    const UINT*                     pCreationNodeMask,
+          IUnknown* const*          ppPresentQueue) {
+    static bool s_errorShown = false;
+
+    if (!std::exchange(s_errorShown, true))
+      Logger::warn("DxgiSwapChain::ResizeBuffers1: Stub");
+
+    return ResizeBuffers(BufferCount,
+      Width, Height, Format, SwapChainFlags);
+  }
+
+
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::ResizeTarget(const DXGI_MODE_DESC* pNewTargetParameters) {
     std::lock_guard<std::mutex> lock(m_lockWindow);
 
@@ -390,7 +349,7 @@ namespace dxvk {
     } else {
       Com<IDXGIOutput> output;
       
-      if (FAILED(m_adapter->GetOutputFromMonitor(m_monitor, &output))) {
+      if (FAILED(GetOutputFromMonitor(m_monitor, &output))) {
         Logger::err("DXGI: ResizeTarget: Failed to query containing output");
         return E_FAIL;
       }
@@ -403,12 +362,11 @@ namespace dxvk {
       DXGI_OUTPUT_DESC desc;
       output->GetDesc(&desc);
       
-      const RECT newRect = desc.DesktopCoordinates;
+      RECT newRect = desc.DesktopCoordinates;
       
       ::MoveWindow(m_window, newRect.left, newRect.top,
           newRect.right - newRect.left, newRect.bottom - newRect.top, TRUE);
     }
-    
     
     return S_OK;
   }
@@ -418,7 +376,7 @@ namespace dxvk {
           BOOL          Fullscreen,
           IDXGIOutput*  pTarget) {
     std::lock_guard<std::mutex> lock(m_lockWindow);
-    
+
     if (m_descFs.Windowed && Fullscreen)
       return this->EnterFullscreenMode(pTarget);
     else if (!m_descFs.Windowed && !Fullscreen)
@@ -442,90 +400,92 @@ namespace dxvk {
   }
   
   
-  HRESULT DxgiSwapChain::SetGammaControl(const DXGI_GAMMA_CONTROL* pGammaControl) {
-    DXGI_VK_GAMMA_CURVE curve;
-    
-    for (uint32_t i = 0; i < DXGI_VK_GAMMA_CP_COUNT; i++) {
-      const DXGI_RGB cp = pGammaControl->GammaCurve[i];
-      curve.ControlPoints[i].R = MapGammaControlPoint(cp.Red);
-      curve.ControlPoints[i].G = MapGammaControlPoint(cp.Green);
-      curve.ControlPoints[i].B = MapGammaControlPoint(cp.Blue);
-      curve.ControlPoints[i].A = 0;
-    }
-    
-    m_presenter->SetGammaControl(&curve);
+  HANDLE STDMETHODCALLTYPE DxgiSwapChain::GetFrameLatencyWaitableObject() {
+    Logger::err("DxgiSwapChain::GetFrameLatencyWaitableObject: Not implemented");
+    return nullptr;
+  }
+
+
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::GetMatrixTransform(
+          DXGI_MATRIX_3X2_F*        pMatrix) {
+    // We don't support composition swap chains
+    Logger::err("DxgiSwapChain::GetMatrixTransform: Not supported");
+    return DXGI_ERROR_INVALID_CALL;
+  }
+
+  
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::GetMaximumFrameLatency(
+          UINT*                     pMaxLatency) {
+    Logger::err("DxgiSwapChain::GetMaximumFrameLatency: Not implemented");
+    return DXGI_ERROR_INVALID_CALL;
+  }
+
+  
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::GetSourceSize(
+          UINT*                     pWidth,
+          UINT*                     pHeight) {
+    // TODO implement properly once supported
+    if (pWidth)  *pWidth  = m_desc.Width;
+    if (pHeight) *pHeight = m_desc.Height;
     return S_OK;
   }
+
   
-  
-  HRESULT DxgiSwapChain::SetDefaultGammaControl() {
-    DXGI_VK_GAMMA_CURVE curve;
-    
-    for (uint32_t i = 0; i < DXGI_VK_GAMMA_CP_COUNT; i++) {
-      const uint16_t value = MapGammaControlPoint(
-        float(i) / float(DXGI_VK_GAMMA_CP_COUNT - 1));
-      curve.ControlPoints[i] = { value, value, value, 0 };
-    }
-    
-    m_presenter->SetGammaControl(&curve);
-    return S_OK;
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::SetMatrixTransform(
+    const DXGI_MATRIX_3X2_F*        pMatrix) {
+    // We don't support composition swap chains
+    Logger::err("DxgiSwapChain::SetMatrixTransform: Not supported");
+    return DXGI_ERROR_INVALID_CALL;
   }
+
   
-  
-  HRESULT DxgiSwapChain::CreatePresenter() {
-    try {
-      m_presenter = new DxgiVkPresenter(
-        m_factory->GetOptions(),
-        m_device->GetDXVKDevice(),
-        m_window);
-      return S_OK;
-    } catch (const DxvkError& e) {
-      Logger::err(e.message());
-      return E_FAIL;
-    }
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::SetMaximumFrameLatency(
+          UINT                      MaxLatency) {
+    Logger::err("DxgiSwapChain::SetMaximumFrameLatency: Not implemented");
+    return DXGI_ERROR_INVALID_CALL;
   }
-  
-  
-  HRESULT DxgiSwapChain::CreateBackBuffer() {
-    // Figure out sample count based on swap chain description
-    VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
-    
-    if (FAILED(GetSampleCount(m_desc.SampleDesc.Count, &sampleCount))) {
-      Logger::err("DXGI: CreateBackBuffer: Invalid sample count");
+
+
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::SetSourceSize(
+          UINT                      Width,
+          UINT                      Height) {
+    if (Width  == 0 || Width  > m_desc.Width
+     || Height == 0 || Height > m_desc.Height)
       return E_INVALIDARG;
-    }
-    
-    // Destroy previous back buffer before creating a new one
-    m_backBuffer = nullptr;
-    
-    if (FAILED(m_presentDevice->CreateSwapChainBackBuffer(&m_desc, &m_backBuffer))) {
-      Logger::err("DXGI: CreateBackBuffer: Failed to create back buffer");
-      return E_FAIL;
-    }
-    
-    try {
-      m_presenter->UpdateBackBuffer(m_backBuffer->GetDXVKImage());
-      return S_OK;
-    } catch (const DxvkError& e) {
-      Logger::err(e.message());
-      return E_FAIL;
-    }
+
+    RECT region;
+    region.left   = 0;
+    region.top    = 0;
+    region.right  = Width;
+    region.bottom = Height;
+    return m_presenter->SetPresentRegion(&region);
+  }
+  
+
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::CheckColorSpaceSupport(
+    DXGI_COLOR_SPACE_TYPE           ColorSpace,
+    UINT*                           pColorSpaceSupport) {
+    Logger::err("DxgiSwapChain::CheckColorSpaceSupport: Not implemented");
+
+    *pColorSpaceSupport = 0;
+    return E_NOTIMPL;
+  }
+
+
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::SetColorSpace1(DXGI_COLOR_SPACE_TYPE ColorSpace) {
+    Logger::err("DxgiSwapChain::SetColorSpace1: Not implemented");
+    return E_NOTIMPL;
   }
   
   
-  VkExtent2D DxgiSwapChain::GetWindowSize() const {
-    RECT windowRect;
-    
-    if (!::GetClientRect(m_window, &windowRect))
-      windowRect = RECT();
-    
-    VkExtent2D result;
-    result.width  = windowRect.right;
-    result.height = windowRect.bottom;
-    return result;
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::SetGammaControl(
+          UINT                      NumPoints,
+    const DXGI_RGB*                 pGammaCurve) {
+    std::lock_guard<std::mutex> lockBuf(m_lockBuffer);
+    return m_presenter->SetGammaControl(NumPoints, pGammaCurve);
   }
-  
-  
+
+
   HRESULT DxgiSwapChain::EnterFullscreenMode(IDXGIOutput* pTarget) {
     Com<IDXGIOutput> output = static_cast<DxgiOutput*>(pTarget);
 
@@ -548,8 +508,10 @@ namespace dxvk {
       displayMode.Height           = m_desc.Height;
       displayMode.RefreshRate      = m_descFs.RefreshRate;
       displayMode.Format           = m_desc.Format;
-      displayMode.ScanlineOrdering = m_descFs.ScanlineOrdering;
-      displayMode.Scaling          = m_descFs.Scaling;
+      // Ignore these two, games usually use them wrong and we don't
+      // support any scaling modes except UNSPECIFIED anyway.
+      displayMode.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+      displayMode.Scaling          = DXGI_MODE_SCALING_UNSPECIFIED;
       
       if (FAILED(ChangeDisplayMode(output.ptr(), &displayMode))) {
         Logger::err("DXGI: EnterFullscreenMode: Failed to change display mode");
@@ -584,19 +546,39 @@ namespace dxvk {
       SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);
     
     m_monitor = desc.Monitor;
+
+    // Apply current gamma curve of the output
+    DXGI_VK_MONITOR_DATA* monitorInfo = nullptr;
+
+    if (SUCCEEDED(AcquireMonitorData(m_monitor, &monitorInfo))) {
+      if (!monitorInfo->pSwapChain)
+        monitorInfo->pSwapChain = this;
+      
+      SetGammaControl(DXGI_VK_GAMMA_CP_COUNT, monitorInfo->GammaCurve.GammaCurve);
+      ReleaseMonitorData();
+    }
+
     return S_OK;
   }
   
   
   HRESULT DxgiSwapChain::LeaveFullscreenMode() {
-    Com<IDXGIOutput> output;
-
     if (!IsWindow(m_window))
       return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
     
-    if (FAILED(m_adapter->GetOutputFromMonitor(m_monitor, &output))
-     || FAILED(RestoreDisplayMode(output.ptr())))
+    if (FAILED(RestoreDisplayMode(m_monitor)))
       Logger::warn("DXGI: LeaveFullscreenMode: Failed to restore display mode");
+    
+    // Reset gamma control and decouple swap chain from monitor
+    DXGI_VK_MONITOR_DATA* monitorInfo = nullptr;
+
+    if (SUCCEEDED(AcquireMonitorData(m_monitor, &monitorInfo))) {
+      if (monitorInfo->pSwapChain == this)
+        monitorInfo->pSwapChain = nullptr;
+      
+      SetGammaControl(0, nullptr);
+      ReleaseMonitorData();
+    }
     
     // Restore internal state
     m_descFs.Windowed = TRUE;
@@ -620,47 +602,56 @@ namespace dxvk {
       rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
       SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
     
-    return SetDefaultGammaControl();
+    return S_OK;
   }
   
   
   HRESULT DxgiSwapChain::ChangeDisplayMode(
           IDXGIOutput*            pOutput,
     const DXGI_MODE_DESC*         pDisplayMode) {
-    auto output = static_cast<DxgiOutput*>(pOutput);
-    
-    if (output == nullptr)
+    if (!pOutput)
       return DXGI_ERROR_INVALID_CALL;
     
     // Find a mode that the output supports
+    DXGI_OUTPUT_DESC outputDesc;
+    pOutput->GetDesc(&outputDesc);
+    
+    DXGI_MODE_DESC preferredMode = *pDisplayMode;
     DXGI_MODE_DESC selectedMode;
+
+    if (preferredMode.Format == DXGI_FORMAT_UNKNOWN)
+      preferredMode.Format = m_desc.Format;
     
-    HRESULT hr = output->FindClosestMatchingMode(
-      pDisplayMode, &selectedMode, nullptr);
+    HRESULT hr = pOutput->FindClosestMatchingMode(
+      &preferredMode, &selectedMode, nullptr);
     
-    if (FAILED(hr))
+    if (FAILED(hr)) {
+      Logger::err(str::format(
+        "DXGI: Failed to query closest mode:",
+        "\n  Format: ", preferredMode.Format,
+        "\n  Mode:   ", preferredMode.Width, "x", preferredMode.Height,
+          "@", preferredMode.RefreshRate.Numerator / preferredMode.RefreshRate.Denominator));
       return hr;
+    }
     
-    return output->SetDisplayMode(&selectedMode);
+    return SetMonitorDisplayMode(outputDesc.Monitor, &selectedMode);
   }
   
   
-  HRESULT DxgiSwapChain::RestoreDisplayMode(IDXGIOutput* pOutput) {
-    auto output = static_cast<DxgiOutput*>(pOutput);
-    
-    if (output == nullptr)
+  HRESULT DxgiSwapChain::RestoreDisplayMode(HMONITOR hMonitor) {
+    if (!hMonitor)
       return DXGI_ERROR_INVALID_CALL;
     
     // Restore registry settings
     DXGI_MODE_DESC mode;
     
-    HRESULT hr = output->GetDisplayMode(
-      &mode, ENUM_REGISTRY_SETTINGS);
+    HRESULT hr = GetMonitorDisplayMode(
+      hMonitor, ENUM_REGISTRY_SETTINGS, &mode);
     
     if (FAILED(hr))
       return hr;
     
-    return output->SetDisplayMode(&mode);
+    return SetMonitorDisplayMode(hMonitor, &mode);
   }
   
   
@@ -674,6 +665,27 @@ namespace dxvk {
     }
     
     return E_INVALIDARG;
+  }
+
+
+  HRESULT DxgiSwapChain::GetOutputFromMonitor(
+          HMONITOR                  Monitor,
+          IDXGIOutput**             ppOutput) {
+    if (!ppOutput)
+      return DXGI_ERROR_INVALID_CALL;
+    
+    for (uint32_t i = 0; SUCCEEDED(m_adapter->EnumOutputs(i, ppOutput)); i++) {
+      DXGI_OUTPUT_DESC outputDesc;
+      (*ppOutput)->GetDesc(&outputDesc);
+      
+      if (outputDesc.Monitor == Monitor)
+        return S_OK;
+      
+      (*ppOutput)->Release();
+      (*ppOutput) = nullptr;
+    }
+    
+    return DXGI_ERROR_NOT_FOUND;
   }
   
 }

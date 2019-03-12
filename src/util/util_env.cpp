@@ -1,23 +1,14 @@
 #include "util_env.h"
-#include <vector>
 
 #include "./com/com_include.h"
 
 namespace dxvk::env {
 
-  std::string getEnvVar(const wchar_t* name) {
-    DWORD len = ::GetEnvironmentVariableW(name, nullptr, 0);
-    
-    std::vector<WCHAR> result;
-    
-    while (len > result.size()) {
-      result.resize(len);
-      len = ::GetEnvironmentVariableW(
-        name, result.data(), result.size());
-    }
-    
-    result.resize(len);
-    return str::fromws(result.data());
+  std::string getEnvVar(const char* name) {
+    char* result = std::getenv(name);
+    return (result)
+      ? result
+      : "";
   }
   
   
@@ -37,7 +28,7 @@ namespace dxvk::env {
   }
   
   
-  void setThreadName(const wchar_t* name) {
+  void setThreadName(const std::string& name) {
     using SetThreadDescriptionProc = void (WINAPI *) (HANDLE, PCWSTR);
 
     HMODULE module = ::GetModuleHandleW(L"kernel32.dll");
@@ -48,8 +39,16 @@ namespace dxvk::env {
     auto proc = reinterpret_cast<SetThreadDescriptionProc>(
       ::GetProcAddress(module, "SetThreadDescription"));
 
-    if (proc != nullptr)
-      (*proc)(::GetCurrentThread(), name);
+    if (proc != nullptr) {
+      auto wideName = str::tows(name);
+      (*proc)(::GetCurrentThread(), wideName.data());
+    }
+  }
+
+
+  bool createDirectory(const std::string& path) {
+    auto widePath = str::tows(path);
+    return !!CreateDirectoryW(widePath.data(), nullptr);
   }
   
 }

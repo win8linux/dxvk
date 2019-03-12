@@ -4,14 +4,11 @@
 #include <d3d10_1.h>
 
 #include "dxgi_adapter.h"
-#include "dxgi_device.h"
 #include "dxgi_enums.h"
 #include "dxgi_factory.h"
 #include "dxgi_format.h"
 #include "dxgi_options.h"
 #include "dxgi_output.h"
-
-#include "../dxvk/vulkan/dxvk_vulkan_names.h"
 
 namespace dxvk {
 
@@ -19,8 +16,7 @@ namespace dxvk {
           DxgiFactory*      factory,
     const Rc<DxvkAdapter>&  adapter)
   : m_factory (factory),
-    m_adapter (adapter),
-    m_formats (adapter) {
+    m_adapter (adapter) {
     
   }
   
@@ -31,6 +27,9 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE DxgiAdapter::QueryInterface(REFIID riid, void** ppvObject) {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+
     *ppvObject = nullptr;
     
     if (riid == __uuidof(IUnknown)
@@ -38,6 +37,7 @@ namespace dxvk {
      || riid == __uuidof(IDXGIAdapter)
      || riid == __uuidof(IDXGIAdapter1)
      || riid == __uuidof(IDXGIAdapter2)
+     || riid == __uuidof(IDXGIAdapter3)
      || riid == __uuidof(IDXGIVkAdapter)) {
       *ppvObject = ref(this);
       return S_OK;
@@ -57,12 +57,16 @@ namespace dxvk {
   HRESULT STDMETHODCALLTYPE DxgiAdapter::CheckInterfaceSupport(
           REFGUID                   InterfaceName,
           LARGE_INTEGER*            pUMDVersion) {
+    const DxgiOptions* options = m_factory->GetOptions();
+
     if (pUMDVersion != nullptr)
       *pUMDVersion = LARGE_INTEGER();
     
-    if (InterfaceName == __uuidof(ID3D10Device)
-     || InterfaceName == __uuidof(ID3D10Device1))
-      return S_OK;
+    if (options->d3d10Enable) {
+      if (InterfaceName == __uuidof(ID3D10Device)
+       || InterfaceName == __uuidof(ID3D10Device1))
+        return S_OK;
+    }
     
     Logger::err("DXGI: CheckInterfaceSupport: Unsupported interface");
     Logger::err(str::format(InterfaceName));
@@ -147,6 +151,7 @@ namespace dxvk {
     
     auto deviceProp = m_adapter->deviceProperties();
     auto memoryProp = m_adapter->memoryProperties();
+    auto deviceId   = m_adapter->devicePropertiesExt().coreDeviceId;
     
     // Custom Vendor / Device ID
     if (options->customVendorId >= 0)
@@ -155,10 +160,18 @@ namespace dxvk {
     if (options->customDeviceId >= 0)
       deviceProp.deviceID = options->customDeviceId;
     
+    // XXX nvapi workaround for a lot of Unreal Engine 4 games
+    if (options->customVendorId < 0 && options->customDeviceId < 0
+     && options->nvapiHack && deviceProp.vendorID == uint16_t(DxvkGpuVendor::Nvidia)) {
+      Logger::info("DXGI: NvAPI workaround enabled, reporting AMD GPU");
+      deviceProp.vendorID = uint16_t(DxvkGpuVendor::Amd);
+      deviceProp.deviceID = 0x67df; /* RX 480 */
+    }
+    
     // Convert device name
     std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
     ::MultiByteToWideChar(CP_UTF8, 0, deviceProp.deviceName, -1,
-        pDesc->Description, sizeof(pDesc->Description));
+        pDesc->Description, sizeof(pDesc->Description) / sizeof(*pDesc->Description));
     
     // Get amount of video memory
     // based on the Vulkan heaps
@@ -198,96 +211,108 @@ namespace dxvk {
     pDesc->DedicatedVideoMemory           = deviceMemory;
     pDesc->DedicatedSystemMemory          = 0;
     pDesc->SharedSystemMemory             = sharedMemory;
-    pDesc->AdapterLuid                    = LUID { 0, 0 };  // TODO implement
+    pDesc->AdapterLuid                    = LUID { 0, 0 };
     pDesc->Flags                          = 0;
     pDesc->GraphicsPreemptionGranularity  = DXGI_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY;
     pDesc->ComputePreemptionGranularity   = DXGI_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY;
+
+    if (deviceId.deviceLUIDValid)
+      std::memcpy(&pDesc->AdapterLuid, deviceId.deviceLUID, VK_LUID_SIZE);
     return S_OK;
   }
   
   
-  Rc<DxvkAdapter> STDMETHODCALLTYPE DxgiAdapter::GetDXVKAdapter() {
-    return m_adapter;
-  }
-  
-  
-  HRESULT STDMETHODCALLTYPE DxgiAdapter::CreateDevice(
-          IDXGIObject*              pContainer,
-    const DxvkDeviceFeatures*       pFeatures,
-          IDXGIVkDevice**           ppDevice) {
-    InitReturnPtr(ppDevice);
-    
-    try {
-      *ppDevice = new dxvk::DxgiDevice(pContainer,
-        this, m_factory->GetOptions(), pFeatures);
-      return S_OK;
-    } catch (const dxvk::DxvkError& e) {
-      dxvk::Logger::err(e.message());
-      return DXGI_ERROR_UNSUPPORTED;
-    }
-  }
-  
-  
-  DXGI_VK_FORMAT_INFO STDMETHODCALLTYPE DxgiAdapter::LookupFormat(
-          DXGI_FORMAT               Format,
-          DXGI_VK_FORMAT_MODE       Mode) {
-    return m_formats.GetFormatInfo(Format, Mode);
-  }
-  
-  
-  DXGI_VK_FORMAT_FAMILY STDMETHODCALLTYPE DxgiAdapter::LookupFormatFamily(
-          DXGI_FORMAT               Format,
-          DXGI_VK_FORMAT_MODE       Mode) {
-    return m_formats.GetFormatFamily(Format, Mode);
-  }
-  
-  
-  HRESULT DxgiAdapter::GetOutputFromMonitor(
-          HMONITOR                  Monitor,
-          IDXGIOutput**             ppOutput) {
-    if (ppOutput == nullptr)
+  HRESULT STDMETHODCALLTYPE DxgiAdapter::QueryVideoMemoryInfo(
+          UINT                          NodeIndex,
+          DXGI_MEMORY_SEGMENT_GROUP     MemorySegmentGroup,
+          DXGI_QUERY_VIDEO_MEMORY_INFO* pVideoMemoryInfo) {
+    if (NodeIndex > 0 || !pVideoMemoryInfo)
       return DXGI_ERROR_INVALID_CALL;
     
-    for (uint32_t i = 0; SUCCEEDED(EnumOutputs(i, ppOutput)); i++) {
-      DXGI_OUTPUT_DESC outputDesc;
-      (*ppOutput)->GetDesc(&outputDesc);
+    if (MemorySegmentGroup != DXGI_MEMORY_SEGMENT_GROUP_LOCAL
+     && MemorySegmentGroup != DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL)
+      return DXGI_ERROR_INVALID_CALL;
+    
+    DxvkAdapterMemoryInfo memInfo = m_adapter->getMemoryHeapInfo();
+
+    VkMemoryHeapFlags heapFlagMask = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+    VkMemoryHeapFlags heapFlags    = 0;
+
+    if (MemorySegmentGroup == DXGI_MEMORY_SEGMENT_GROUP_LOCAL)
+      heapFlags |= VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+    
+    pVideoMemoryInfo->Budget       = 0;
+    pVideoMemoryInfo->CurrentUsage = 0;
+
+    for (uint32_t i = 0; i < memInfo.heapCount; i++) {
+      if ((memInfo.heaps[i].heapFlags & heapFlagMask) != heapFlags)
+        continue;
       
-      if (outputDesc.Monitor == Monitor)
-        return S_OK;
-      
-      (*ppOutput)->Release();
-      (*ppOutput) = nullptr;
+      pVideoMemoryInfo->Budget       += memInfo.heaps[i].memoryAvailable;
+      pVideoMemoryInfo->CurrentUsage += memInfo.heaps[i].memoryAllocated;
     }
-    
-    // No such output found
-    return DXGI_ERROR_NOT_FOUND;
-  }
-  
-  
-  HRESULT DxgiAdapter::GetOutputData(
-          HMONITOR                  Monitor,
-          DXGI_VK_OUTPUT_DATA*      pOutputData) {
-    std::lock_guard<std::mutex> lock(m_outputMutex);
-    
-    auto entry = m_outputData.find(Monitor);
-    if (entry == m_outputData.end())
-      return DXGI_ERROR_NOT_FOUND;
-    
-    if (pOutputData == nullptr)
-      return S_FALSE;
-    
-    *pOutputData = entry->second;
+
+    // We don't implement reservation, but the observable
+    // behaviour should match that of Windows drivers
+    uint32_t segmentId = uint32_t(MemorySegmentGroup);
+
+    pVideoMemoryInfo->AvailableForReservation = pVideoMemoryInfo->Budget / 2;
+    pVideoMemoryInfo->CurrentReservation      = m_memReservation[segmentId];
     return S_OK;
   }
-  
-  
-  HRESULT DxgiAdapter::SetOutputData(
-          HMONITOR                  Monitor,
-    const DXGI_VK_OUTPUT_DATA*      pOutputData) {
-    std::lock_guard<std::mutex> lock(m_outputMutex);
+
+
+  HRESULT STDMETHODCALLTYPE DxgiAdapter::SetVideoMemoryReservation(
+          UINT                          NodeIndex,
+          DXGI_MEMORY_SEGMENT_GROUP     MemorySegmentGroup,
+          UINT64                        Reservation) {
+    DXGI_QUERY_VIDEO_MEMORY_INFO info;
+
+    HRESULT hr = QueryVideoMemoryInfo(
+      NodeIndex, MemorySegmentGroup, &info);
     
-    m_outputData.insert_or_assign(Monitor, *pOutputData);
+    if (FAILED(hr))
+      return hr;
+    
+    if (Reservation > info.AvailableForReservation)
+      return DXGI_ERROR_INVALID_CALL;
+    
+    uint32_t segmentId = uint32_t(MemorySegmentGroup);
+    m_memReservation[segmentId] = Reservation;
     return S_OK;
+  }
+
+  
+  HRESULT STDMETHODCALLTYPE DxgiAdapter::RegisterHardwareContentProtectionTeardownStatusEvent(
+          HANDLE                        hEvent,
+          DWORD*                        pdwCookie) {
+    Logger::err("DxgiAdapter::RegisterHardwareContentProtectionTeardownStatusEvent: Not implemented");
+    return E_NOTIMPL;
+  }
+
+
+  HRESULT STDMETHODCALLTYPE DxgiAdapter::RegisterVideoMemoryBudgetChangeNotificationEvent(
+          HANDLE                        hEvent,
+          DWORD*                        pdwCookie) {
+    Logger::err("DxgiAdapter::RegisterVideoMemoryBudgetChangeNotificationEvent: Not implemented");
+    return E_NOTIMPL;
+  }
+  
+
+  void STDMETHODCALLTYPE DxgiAdapter::UnregisterHardwareContentProtectionTeardownStatus(
+          DWORD                         dwCookie) {
+    Logger::err("DxgiAdapter::UnregisterHardwareContentProtectionTeardownStatus: Not implemented");
+  }
+
+
+  void STDMETHODCALLTYPE DxgiAdapter::UnregisterVideoMemoryBudgetChangeNotification(
+          DWORD                         dwCookie) {
+    Logger::err("DxgiAdapter::UnregisterVideoMemoryBudgetChangeNotification: Not implemented");
+  }
+
+
+  Rc<DxvkAdapter> STDMETHODCALLTYPE DxgiAdapter::GetDXVKAdapter() {
+    return m_adapter;
   }
   
 }

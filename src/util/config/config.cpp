@@ -11,48 +11,104 @@
 namespace dxvk {
 
   const static std::unordered_map<std::string, Config> g_appDefaults = {{
+    /* Assassin's Creed Syndicate: amdags issues  */
+    { "ACS.exe", {{
+      { "dxgi.customVendorId",              "10de" },
+    }} },
     /* Dishonored 2                               */
     { "Dishonored2.exe", {{
       { "d3d11.allowMapFlagNoWait",         "True" }
     }} },
-    /* Dragon Quest 2 - keeps searching for NVAPI */
-    { "DRAGON QUEST XI.exe", {{
-      { "dxgi.customVendorId",              "1002" },
-      { "dxgi.customDeviceId",              "E366" },
+    /* Elite Dangerous: Compiles weird shaders    *
+     * when running on AMD hardware               */
+    { "EliteDangerous64.exe", {{
+      { "dxgi.customVendorId",              "10de" },
     }} },
-    /* F1 2015                                    */
-    { "F1_2015.exe", {{
-      { "d3d11.fakeStreamOutSupport",       "True" },
+    /* The Vanishing of Ethan Carter Redux        */
+    { "EthanCarter-Win64-Shipping.exe", {{
+      { "dxgi.customVendorId",              "10de" },
     }} },
-    /* Far Cry 5                                  */
+    /* The Evil Within: Submits command lists     * 
+     * multiple times                             */
+    { "EvilWithin.exe", {{
+      { "d3d11.dcSingleUseMode",            "False" },
+    }} },
+    /* The Evil Within Demo                       */
+    { "EvilWithinDemo.exe", {{
+      { "d3d11.dcSingleUseMode",            "False" },
+    }} },
+    /* Far Cry 3: Assumes clear(0.5) on an UNORM  *
+     * format to result in 128 on AMD and 127 on  *
+     * Nvidia. Most Vulkan drivers clear to 127,  *
+     * assuming higher values causes artifacts.   */
+    { "farcry3_d3d11.exe", {{
+      { "dxgi.customVendorId",              "10de" },
+    }} },
+    { "fc3_blooddragon_d3d11.exe", {{
+      { "dxgi.customVendorId",              "10de" },
+    }} },
+    /* Far Cry 4: Same as Far Cry 3               */
+    { "FarCry4.exe", {{
+      { "dxgi.customVendorId",              "10de" },
+    }} },
+    /* Far Cry 5: Avoid CPU <-> GPU sync          */
     { "FarCry5.exe", {{
       { "d3d11.allowMapFlagNoWait",         "True" }
     }} },
-    /* Final Fantasy XV                           */
-    { "ffxv_s.exe", {{
-      { "d3d11.fakeStreamOutSupport",       "True" },
-    }} },
-    /* Frostpunk                                  */
+    /* Far Cry Primal: Nvidia performance         */
+    { "FCPrimal.exe", {{
+      { "dxgi.nvapiHack",                   "False" },
+    } }},
+    /* Frostpunk: Renders one frame with D3D9     *
+     * after creating the DXGI swap chain         */
     { "Frostpunk.exe", {{
       { "dxgi.deferSurfaceCreation",        "True" },
     }} },
-    /* Grand Theft Auto V                         */
-    { "GTA5.exe", {{
-      { "dxgi.customVendorId",              "1002" },
-      { "dxgi.customDeviceId",              "E366" },
+    /* Quantum Break: Mever initializes shared    *
+     * memory in one of its compute shaders       */
+    { "QuantumBreak.exe", {{
+      { "d3d11.zeroInitWorkgroupMemory",    "True" },
     }} },
-    /* Batman: Arkham Knight                      */
-    { "BatmanAK.exe", {{
-      { "dxgi.customVendorId",              "1002" },
-      { "dxgi.customDeviceId",              "E366" },
+    /* Anno 2205: Random crashes with state cache */
+    { "anno2205.exe", {{
+      { "dxvk.enableStateCache",            "False" },
     }} },
-    /* Mafia 3                                    */
-    { "mafia3.exe", {{
-      { "d3d11.fakeStreamOutSupport",       "True" },
+    /* Fifa '19: Binds typed buffer SRV to shader *
+     * that expects raw/structured buffer SRV     */
+    { "FIFA19.exe", {{
+      { "dxvk.useRawSsbo",                  "True" },
     }} },
-    /* Overwatch                                  */
-    { "Overwatch.exe", {{
-      { "d3d11.fakeStreamOutSupport",       "True" },
+    /* Final Fantasy XIV: Fix random black blocks */
+    { "ffxiv_dx11.exe", {{
+      { "d3d11.strictDivision",             "True" },
+    }} },
+    /* Fifa '19 Demo                              */
+    { "FIFA19_demo.exe", {{
+      { "dxvk.useRawSsbo",                  "True" },
+    }} },
+    /* Resident Evil 2: Improve GPU performance   */
+    { "re2.exe", {{
+      { "d3d11.relaxedBarriers",            "True" },
+    }} },
+    /* Resident Evil 7                            */
+    { "re7.exe", {{
+      { "d3d11.relaxedBarriers",            "True" },
+    }} },
+    /* Devil May Cry 5                            */
+    { "DevilMayCry5.exe", {{
+      { "d3d11.relaxedBarriers",            "True" },
+    }} },
+    /* Call of Duty WW2                           */
+    { "s2_sp64_ship.exe", {{
+      { "dxgi.nvapiHack",                   "False" },
+    }} },
+    /* Need for Speed 2015                        */
+    { "NFS16.exe", {{
+      { "dxgi.nvapiHack",                   "False" },
+    }} },
+    /* Mass Effect Andromeda                      */
+    { "MassEffectAndromeda.exe", {{
+      { "dxgi.nvapiHack",                   "False" },
     }} },
   }};
 
@@ -180,12 +236,35 @@ namespace dxvk {
     result = sign * intval;
     return true;
   }
+  
+  
+  bool Config::parseOptionValue(
+    const std::string&  value,
+          Tristate&     result) {
+    if (value == "True") {
+      result = Tristate::True;
+      return true;
+    } else if (value == "False") {
+      result = Tristate::False;
+      return true;
+    } else if (value == "Auto") {
+      result = Tristate::Auto;
+      return true;
+    } else {
+      return false;
+    }
+  }
 
 
   Config Config::getAppConfig(const std::string& appName) {
     auto appConfig = g_appDefaults.find(appName);
-    if (appConfig != g_appDefaults.end())
+    if (appConfig != g_appDefaults.end()) {
+      // Inform the user that we loaded a default config
+      Logger::info(str::format("Found built-in config: ", appName));
+
       return appConfig->second;
+    }
+
     return Config();
   }
 
@@ -194,7 +273,7 @@ namespace dxvk {
     Config config;
 
     // Load either $DXVK_CONFIG_FILE or $PWD/dxvk.conf
-    std::string filePath = env::getEnvVar(L"DXVK_CONFIG_FILE");
+    std::string filePath = env::getEnvVar("DXVK_CONFIG_FILE");
 
     if (filePath == "")
       filePath = "dxvk.conf";
@@ -216,6 +295,16 @@ namespace dxvk {
       parseUserConfigLine(config, line);
     
     return config;
+  }
+
+
+  void Config::logOptions() const {
+    if (!m_options.empty()) {
+      Logger::info("Effective configuration:");
+
+      for (auto& pair : m_options)
+        Logger::info(str::format("  ", pair.first, " = ", pair.second));
+    }
   }
 
 }

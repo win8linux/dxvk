@@ -27,9 +27,11 @@ namespace dxvk {
    * be persistently mapped.
    */
   struct DxvkDeviceMemory {
-    VkDeviceMemory    memHandle  = VK_NULL_HANDLE;
-    void*             memPointer = nullptr;
-    VkDeviceSize      memSize    = 0;
+    VkDeviceMemory        memHandle  = VK_NULL_HANDLE;
+    void*                 memPointer = nullptr;
+    VkDeviceSize          memSize    = 0;
+    VkMemoryPropertyFlags memFlags   = 0;
+    float                 priority   = 0.0f;
   };
 
   
@@ -55,6 +57,7 @@ namespace dxvk {
    */
   struct DxvkMemoryType {
     DxvkMemoryHeap*   heap;
+    uint32_t          heapId;
 
     VkMemoryType      memType;
     uint32_t          memTypeId;
@@ -159,19 +162,23 @@ namespace dxvk {
             DxvkDeviceMemory      memory);
     
     ~DxvkMemoryChunk();
-    
+
     /**
      * \brief Allocates memory from the chunk
      * 
      * On failure, this returns a slice with
      * \c VK_NULL_HANDLE as the memory handle.
+     * \param [in] flags Requested memory flags
      * \param [in] size Number of bytes to allocate
      * \param [in] align Required alignment
+     * \param [in] priority Requested priority
      * \returns The allocated memory slice
      */
     DxvkMemory alloc(
-            VkDeviceSize size,
-            VkDeviceSize align);
+            VkMemoryPropertyFlags flags,
+            VkDeviceSize          size,
+            VkDeviceSize          align,
+            float                 priority);
     
     /**
      * \brief Frees memory
@@ -232,13 +239,16 @@ namespace dxvk {
      * \brief Allocates device memory
      * 
      * \param [in] req Memory requirements
-     * \param [in] flats Memory type flags
+     * \param [in] dedAllocInfo Dedicated allocation info
+     * \param [in] flags Memory type flags
+     * \param [in] priority Device-local memory priority
      * \returns Allocated memory slice
      */
     DxvkMemory alloc(
       const VkMemoryRequirements*             req,
       const VkMemoryDedicatedAllocateInfoKHR* dedAllocInfo,
-            VkMemoryPropertyFlags             flags);
+            VkMemoryPropertyFlags             flags,
+            float                             priority);
     
     /**
      * \brief Queries memory stats
@@ -252,9 +262,9 @@ namespace dxvk {
   private:
 
     const Rc<vk::DeviceFn>                 m_vkd;
+    const DxvkDevice*                      m_device;
     const VkPhysicalDeviceProperties       m_devProps;
     const VkPhysicalDeviceMemoryProperties m_memProps;
-    const bool                             m_allowOvercommit;
     
     std::mutex                                      m_mutex;
     std::array<DxvkMemoryHeap, VK_MAX_MEMORY_HEAPS> m_memHeaps;
@@ -263,17 +273,22 @@ namespace dxvk {
     DxvkMemory tryAlloc(
       const VkMemoryRequirements*             req,
       const VkMemoryDedicatedAllocateInfoKHR* dedAllocInfo,
-            VkMemoryPropertyFlags             flags);
+            VkMemoryPropertyFlags             flags,
+            float                             priority);
     
     DxvkMemory tryAllocFromType(
             DxvkMemoryType*                   type,
+            VkMemoryPropertyFlags             flags,
             VkDeviceSize                      size,
             VkDeviceSize                      align,
+            float                             priority,
       const VkMemoryDedicatedAllocateInfoKHR* dedAllocInfo);
     
     DxvkDeviceMemory tryAllocDeviceMemory(
             DxvkMemoryType*                   type,
+            VkMemoryPropertyFlags             flags,
             VkDeviceSize                      size,
+            float                             priority,
       const VkMemoryDedicatedAllocateInfoKHR* dedAllocInfo);
     
     void free(

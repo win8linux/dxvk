@@ -1,4 +1,5 @@
 #include "d3d11_context_def.h"
+#include "d3d11_device.h"
 
 namespace dxvk {
   
@@ -6,7 +7,7 @@ namespace dxvk {
           D3D11Device*    pParent,
     const Rc<DxvkDevice>& Device,
           UINT            ContextFlags)
-  : D3D11DeviceContext(pParent, Device),
+  : D3D11DeviceContext(pParent, Device, GetCsChunkFlags(pParent)),
     m_contextFlags(ContextFlags),
     m_commandList (CreateCommandList()) {
     ClearState();
@@ -41,6 +42,8 @@ namespace dxvk {
   void STDMETHODCALLTYPE D3D11DeferredContext::ExecuteCommandList(
           ID3D11CommandList*  pCommandList,
           BOOL                RestoreContextState) {
+    D3D10DeviceLock lock = LockContext();
+
     FlushCsChunk();
     
     static_cast<D3D11CommandList*>(pCommandList)->EmitToCommandList(m_commandList.ptr());
@@ -55,6 +58,8 @@ namespace dxvk {
   HRESULT STDMETHODCALLTYPE D3D11DeferredContext::FinishCommandList(
           BOOL                RestoreDeferredContextState,
           ID3D11CommandList   **ppCommandList) {
+    D3D10DeviceLock lock = LockContext();
+
     FlushCsChunk();
     
     if (ppCommandList != nullptr)
@@ -77,6 +82,8 @@ namespace dxvk {
           D3D11_MAP                   MapType,
           UINT                        MapFlags,
           D3D11_MAPPED_SUBRESOURCE*   pMappedResource) {
+    D3D10DeviceLock lock = LockContext();
+
     D3D11_RESOURCE_DIMENSION resourceDim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
     pResource->GetType(&resourceDim);
     
@@ -131,6 +138,8 @@ namespace dxvk {
   void STDMETHODCALLTYPE D3D11DeferredContext::Unmap(
           ID3D11Resource*             pResource,
           UINT                        Subresource) {
+    D3D10DeviceLock lock = LockContext();
+
     D3D11_RESOURCE_DIMENSION resourceDim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
     pResource->GetType(&resourceDim);
     
@@ -156,12 +165,8 @@ namespace dxvk {
           UINT                          MapFlags,
           D3D11DeferredContextMapEntry* pMapEntry) {
     D3D11Buffer* pBuffer = static_cast<D3D11Buffer*>(pResource);
-    const Rc<DxvkBuffer> buffer = pBuffer->GetBuffer();
     
-    D3D11_BUFFER_DESC bufferDesc;
-    pBuffer->GetDesc(&bufferDesc);
-    
-    if (!(buffer->memFlags() & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+    if (unlikely(pBuffer->GetMapMode() == D3D11_COMMON_BUFFER_MAP_MODE_NONE)) {
       Logger::err("D3D11: Cannot map a device-local buffer");
       return E_INVALIDARG;
     }
@@ -169,19 +174,19 @@ namespace dxvk {
     pMapEntry->pResource    = pResource;
     pMapEntry->Subresource  = 0;
     pMapEntry->MapType      = D3D11_MAP_WRITE_DISCARD;
-    pMapEntry->RowPitch     = pBuffer->GetSize();
-    pMapEntry->DepthPitch   = pBuffer->GetSize();
+    pMapEntry->RowPitch     = pBuffer->Desc()->ByteWidth;
+    pMapEntry->DepthPitch   = pBuffer->Desc()->ByteWidth;
     
-    if (bufferDesc.Usage == D3D11_USAGE_DYNAMIC) {
+    if (pBuffer->Desc()->Usage == D3D11_USAGE_DYNAMIC && m_csFlags.test(DxvkCsChunkFlag::SingleUse)) {
       // For resources that cannot be written by the GPU,
       // we may write to the buffer resource directly and
-      // just swap in the physical buffer slice as needed.
-      pMapEntry->BufferSlice = buffer->allocPhysicalSlice();
-      pMapEntry->MapPointer  = pMapEntry->BufferSlice.mapPtr(0);
+      // just swap in the buffer slice as needed.
+      pMapEntry->BufferSlice = pBuffer->AllocSlice();
+      pMapEntry->MapPointer  = pMapEntry->BufferSlice.mapPtr;
     } else {
       // For GPU-writable resources, we need a data slice
       // to perform the update operation at execution time.
-      pMapEntry->DataSlice   = AllocUpdateBufferSlice(pBuffer->GetSize());
+      pMapEntry->DataSlice   = AllocUpdateBufferSlice(pBuffer->Desc()->ByteWidth);
       pMapEntry->MapPointer  = pMapEntry->DataSlice.ptr();
     }
     
@@ -239,10 +244,7 @@ namespace dxvk {
     const D3D11DeferredContextMapEntry* pMapEntry) {
     D3D11Buffer* pBuffer = static_cast<D3D11Buffer*>(pResource);
     
-    D3D11_BUFFER_DESC bufferDesc;
-    pBuffer->GetDesc(&bufferDesc);
-    
-    if (bufferDesc.Usage == D3D11_USAGE_DYNAMIC) {
+    if (pBuffer->Desc()->Usage == D3D11_USAGE_DYNAMIC && m_csFlags.test(DxvkCsChunkFlag::SingleUse)) {
       EmitCs([
         cDstBuffer = pBuffer->GetBuffer(),
         cPhysSlice = pMapEntry->BufferSlice
@@ -254,8 +256,8 @@ namespace dxvk {
         cDstBuffer = pBuffer->GetBuffer(),
         cDataSlice = pMapEntry->DataSlice
       ] (DxvkContext* ctx) {
-        DxvkPhysicalBufferSlice slice = cDstBuffer->allocPhysicalSlice();
-        std::memcpy(slice.mapPtr(0), cDataSlice.ptr(), cDataSlice.length());
+        DxvkBufferSliceHandle slice = cDstBuffer->allocSlice();
+        std::memcpy(slice.mapPtr, cDataSlice.ptr(), cDataSlice.length());
         ctx->invalidateBuffer(cDstBuffer, slice);
       });
     }
@@ -301,6 +303,14 @@ namespace dxvk {
   
   void D3D11DeferredContext::EmitCsChunk(DxvkCsChunkRef&& chunk) {
     m_commandList->AddChunk(std::move(chunk));
+  }
+
+
+  DxvkCsChunkFlags D3D11DeferredContext::GetCsChunkFlags(
+          D3D11Device*                  pDevice) {
+    return pDevice->GetOptions()->dcSingleUseMode
+      ? DxvkCsChunkFlags(DxvkCsChunkFlag::SingleUse)
+      : DxvkCsChunkFlags();
   }
 
 }

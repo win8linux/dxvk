@@ -6,6 +6,7 @@
 #include "../dxbc/dxbc_options.h"
 
 #include "../dxgi/dxgi_object.h"
+#include "../dxgi/dxgi_interfaces.h"
 
 #include "../dxvk/dxvk_cs.h"
 
@@ -16,6 +17,7 @@
 #include "d3d11_counter_buffer.h"
 #include "d3d11_initializer.h"
 #include "d3d11_interfaces.h"
+#include "d3d11_interop.h"
 #include "d3d11_options.h"
 #include "d3d11_shader.h"
 #include "d3d11_state.h"
@@ -29,43 +31,13 @@ namespace dxvk {
   class D3D11CommonTexture;
   class D3D11Counter;
   class D3D11DeviceContext;
+  class D3D11DXGIDevice;
   class D3D11ImmediateContext;
   class D3D11Predicate;
-  class D3D11Presenter;
   class D3D11Query;
   class D3D11Texture1D;
   class D3D11Texture2D;
   class D3D11Texture3D;
-  class D3D11VkInterop;
-  
-  /**
-   * \brief D3D11 device container
-   * 
-   * Stores all the objects that contribute to the D3D11
-   * device implementation, including the DXGI device.
-   */
-  class D3D11DeviceContainer : public DxgiObject<IDXGIObject> {
-    
-  public:
-    
-    D3D11DeviceContainer();
-    ~D3D11DeviceContainer();
-    
-    HRESULT STDMETHODCALLTYPE QueryInterface(
-            REFIID                  riid,
-            void**                  ppvObject);
-    
-    HRESULT STDMETHODCALLTYPE GetParent(
-            REFIID                  riid,
-            void**                  ppParent);
-    
-    IDXGIVkDevice*  m_dxgiDevice      = nullptr;
-    D3D11Device*    m_d3d11Device     = nullptr;
-    D3D11Presenter* m_d3d11Presenter  = nullptr;
-    D3D11VkInterop* m_d3d11VkInterop  = nullptr;
-    
-  };
-  
   
   /**
    * \brief D3D11 device implementation
@@ -79,10 +51,10 @@ namespace dxvk {
   public:
     
     D3D11Device(
-            IDXGIObject*            pContainer,
-            IDXGIVkDevice*          pDxgiDevice,
+            D3D11DXGIDevice*        pContainer,
             D3D_FEATURE_LEVEL       FeatureLevel,
             UINT                    FeatureFlags);
+    
     ~D3D11Device();
     
     ULONG STDMETHODCALLTYPE AddRef();
@@ -323,7 +295,9 @@ namespace dxvk {
     
     void FlushInitContext();
     
-    VkPipelineStageFlags GetEnabledShaderStages() const;
+    VkPipelineStageFlags GetEnabledShaderStages() const {
+      return m_dxvkDevice->getShaderPipelineStages();
+    }
     
     DXGI_VK_FORMAT_INFO LookupFormat(
             DXGI_FORMAT           Format,
@@ -333,16 +307,8 @@ namespace dxvk {
             DXGI_FORMAT           Format,
             DXGI_VK_FORMAT_MODE   Mode) const;
     
-    DxvkBufferSlice AllocCounterSlice() {
-      return m_uavCounters->AllocSlice();
-    }
-    
-    void FreeCounterSlice(const DxvkBufferSlice& Slice) {
-      m_uavCounters->FreeSlice(Slice);
-    }
-    
-    DxvkCsChunkRef AllocCsChunk() {
-      DxvkCsChunk* chunk = m_csChunkPool.allocChunk();
+    DxvkCsChunkRef AllocCsChunk(DxvkCsChunkFlags flags) {
+      DxvkCsChunk* chunk = m_csChunkPool.allocChunk(flags);
       return DxvkCsChunkRef(chunk, &m_csChunkPool);
     }
     
@@ -353,6 +319,12 @@ namespace dxvk {
     D3D10Device* GetD3D10Interface() const {
       return m_d3d10Device;
     }
+    
+    DxvkBufferSlice AllocUavCounterSlice() { return m_uavCounters->AllocSlice(); }
+    DxvkBufferSlice AllocXfbCounterSlice() { return m_xfbCounters->AllocSlice(); }
+    
+    void FreeUavCounterSlice(const DxvkBufferSlice& Slice) { m_uavCounters->FreeSlice(Slice); }
+    void FreeXfbCounterSlice(const DxvkBufferSlice& Slice) { m_xfbCounters->FreeSlice(Slice); }
     
     static bool CheckFeatureLevelSupport(
       const Rc<DxvkAdapter>&  adapter,
@@ -365,7 +337,6 @@ namespace dxvk {
   private:
     
     IDXGIObject*                    m_container;
-    Com<IDXGIVkAdapter>             m_dxgiAdapter;
 
     const D3D_FEATURE_LEVEL         m_featureLevel;
     const UINT                      m_featureFlags;
@@ -373,6 +344,7 @@ namespace dxvk {
     const Rc<DxvkDevice>            m_dxvkDevice;
     const Rc<DxvkAdapter>           m_dxvkAdapter;
     
+    const DXGIVkFormatTable         m_d3d11Formats;
     const D3D11Options              m_d3d11Options;
     const DxbcOptions               m_dxbcOptions;
     
@@ -383,6 +355,7 @@ namespace dxvk {
     D3D10Device*                    m_d3d10Device = nullptr;
 
     Rc<D3D11CounterBuffer>          m_uavCounters;
+    Rc<D3D11CounterBuffer>          m_xfbCounters;
     
     D3D11StateObjectSet<D3D11BlendState>        m_bsStateObjects;
     D3D11StateObjectSet<D3D11DepthStencilState> m_dsStateObjects;
@@ -391,14 +364,15 @@ namespace dxvk {
     D3D11ShaderModuleSet                        m_shaderModules;
     
     Rc<D3D11CounterBuffer> CreateUAVCounterBuffer();
+    Rc<D3D11CounterBuffer> CreateXFBCounterBuffer();
 
     HRESULT CreateShaderModule(
             D3D11CommonShader*      pShaderModule,
+            DxvkShaderKey           ShaderKey,
       const void*                   pShaderBytecode,
             size_t                  BytecodeLength,
             ID3D11ClassLinkage*     pClassLinkage,
-      const DxbcModuleInfo*         pModuleInfo,
-            DxbcProgramType         ProgramType);
+      const DxbcModuleInfo*         pModuleInfo);
     
     HRESULT GetFormatSupportFlags(
             DXGI_FORMAT Format,
@@ -412,6 +386,136 @@ namespace dxvk {
     static D3D_FEATURE_LEVEL GetMaxFeatureLevel(
       const Rc<DxvkAdapter>&        Adapter);
     
+  };
+  
+  
+  /**
+   * \brief DXGI swap chain factory
+   */
+  class WineDXGISwapChainFactory : public IWineDXGISwapChainFactory {
+    
+  public:
+    
+    WineDXGISwapChainFactory(
+            D3D11DXGIDevice*        pContainer,
+            D3D11Device*            pDevice);
+    
+    ULONG STDMETHODCALLTYPE AddRef();
+    
+    ULONG STDMETHODCALLTYPE Release();
+    
+    HRESULT STDMETHODCALLTYPE QueryInterface(
+            REFIID                  riid,
+            void**                  ppvObject);
+    
+    HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(
+            IDXGIFactory*           pFactory,
+            HWND                    hWnd,
+      const DXGI_SWAP_CHAIN_DESC1*  pDesc,
+      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
+            IDXGIOutput*            pRestrictToOutput,
+            IDXGISwapChain1**       ppSwapChain);
+    
+  private:
+    
+    D3D11DXGIDevice* m_container;
+    D3D11Device*     m_device;
+    
+  };
+  
+
+  /**
+   * \brief D3D11 device container
+   * 
+   * Stores all the objects that contribute to the D3D11
+   * device implementation, including the DXGI device.
+   */
+  class D3D11DXGIDevice : public DxgiObject<IDXGIDevice3> {
+    constexpr static uint32_t DefaultFrameLatency = 3;
+  public:
+    
+    D3D11DXGIDevice(
+          IDXGIAdapter*       pAdapter,
+          DxvkAdapter*        pDxvkAdapter,
+          D3D_FEATURE_LEVEL   FeatureLevel,
+          UINT                FeatureFlags);
+    
+    ~D3D11DXGIDevice();
+    
+    HRESULT STDMETHODCALLTYPE QueryInterface(
+            REFIID                riid,
+            void**                ppvObject);
+    
+    HRESULT STDMETHODCALLTYPE GetParent(
+            REFIID                riid,
+            void**                ppParent);
+    
+    HRESULT STDMETHODCALLTYPE CreateSurface(
+      const DXGI_SURFACE_DESC*    pDesc,
+            UINT                  NumSurfaces,
+            DXGI_USAGE            Usage,
+      const DXGI_SHARED_RESOURCE* pSharedResource,
+            IDXGISurface**        ppSurface) final;
+    
+    HRESULT STDMETHODCALLTYPE GetAdapter(
+            IDXGIAdapter**        pAdapter) final;
+    
+    HRESULT STDMETHODCALLTYPE GetGPUThreadPriority(
+            INT*                  pPriority) final;
+    
+    HRESULT STDMETHODCALLTYPE QueryResourceResidency(
+            IUnknown* const*      ppResources,
+            DXGI_RESIDENCY*       pResidencyStatus,
+            UINT                  NumResources) final;
+    
+    HRESULT STDMETHODCALLTYPE SetGPUThreadPriority(
+            INT                   Priority) final;
+    
+    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(
+            UINT*                 pMaxLatency) final;
+    
+    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(
+            UINT                  MaxLatency) final;
+
+    HRESULT STDMETHODCALLTYPE OfferResources( 
+            UINT                          NumResources,
+            IDXGIResource* const*         ppResources,
+            DXGI_OFFER_RESOURCE_PRIORITY  Priority) final;
+        
+    HRESULT STDMETHODCALLTYPE ReclaimResources( 
+            UINT                          NumResources,
+            IDXGIResource* const*         ppResources,
+            BOOL*                         pDiscarded) final;
+        
+    HRESULT STDMETHODCALLTYPE EnqueueSetEvent( 
+            HANDLE                hEvent) final;
+    
+    void STDMETHODCALLTYPE Trim() final;
+    
+    Rc<DxvkEvent> STDMETHODCALLTYPE GetFrameSyncEvent();
+
+    Rc<DxvkDevice> STDMETHODCALLTYPE GetDXVKDevice();
+
+  private:
+
+    Com<IDXGIAdapter>   m_dxgiAdapter;
+
+    Rc<DxvkAdapter>     m_dxvkAdapter;
+    Rc<DxvkDevice>      m_dxvkDevice;
+
+    D3D11Device         m_d3d11Device;
+    D3D11VkInterop      m_d3d11Interop;
+    
+    WineDXGISwapChainFactory m_wineFactory;
+    
+    uint32_t m_frameLatencyCap = 0;
+    uint32_t m_frameLatency    = DefaultFrameLatency;
+    uint32_t m_frameId         = 0;
+
+    std::array<Rc<DxvkEvent>, 16> m_frameEvents;
+
+    Rc<DxvkDevice> CreateDevice(D3D_FEATURE_LEVEL FeatureLevel);
+
   };
   
 }

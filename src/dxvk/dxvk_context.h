@@ -1,13 +1,15 @@
 #pragma once
 
 #include "dxvk_barrier.h"
-#include "dxvk_binding.h"
+#include "dxvk_bind_mask.h"
 #include "dxvk_cmdlist.h"
 #include "dxvk_context_state.h"
 #include "dxvk_data.h"
 #include "dxvk_event.h"
 #include "dxvk_meta_clear.h"
+#include "dxvk_meta_copy.h"
 #include "dxvk_meta_mipgen.h"
+#include "dxvk_meta_pack.h"
 #include "dxvk_meta_resolve.h"
 #include "dxvk_pipecache.h"
 #include "dxvk_pipemanager.h"
@@ -33,7 +35,9 @@ namespace dxvk {
       const Rc<DxvkDevice>&             device,
       const Rc<DxvkPipelineManager>&    pipelineManager,
       const Rc<DxvkMetaClearObjects>&   metaClearObjects,
+      const Rc<DxvkMetaCopyObjects>&    metaCopyObjects,
       const Rc<DxvkMetaMipGenObjects>&  metaMipGenObjects,
+      const Rc<DxvkMetaPackObjects>&    metaPackObjects,
       const Rc<DxvkMetaResolveObjects>& metaResolveObjects);
     ~DxvkContext();
     
@@ -60,6 +64,14 @@ namespace dxvk {
      * \returns Active command list
      */
     Rc<DxvkCommandList> endRecording();
+
+    /**
+     * \brief Flushes command buffer
+     * 
+     * Transparently submits the current command
+     * buffer and allocates a new one.
+     */
+    void flushCommandList();
     
     /**
      * \brief Begins generating query data
@@ -88,6 +100,16 @@ namespace dxvk {
     void bindRenderTargets(
       const DxvkRenderTargets&    targets,
             bool                  spill);
+    
+    /**
+     * \brief Binds indirect argument buffer
+     * 
+     * Sets the buffer that is going to be used
+     * for indirect draw and dispatch operations.
+     * \param [in] buffer New argument buffer
+     */
+    void bindDrawBuffer(
+      const DxvkBufferSlice&      buffer);
     
     /**
      * \brief Binds index buffer
@@ -162,6 +184,18 @@ namespace dxvk {
             uint32_t              stride);
     
     /**
+     * \brief Binds transform feedback buffer
+     * 
+     * \param [in] binding Xfb buffer binding
+     * \param [in] buffer The buffer to bind
+     * \param [in] counter Xfb counter buffer
+     */
+    void bindXfbBuffer(
+            uint32_t              binding,
+      const DxvkBufferSlice&      buffer,
+      const DxvkBufferSlice&      counter);
+    
+    /**
      * \brief Clears a buffer with a fixed value
      * 
      * Note that both \c offset and \c length must
@@ -219,6 +253,16 @@ namespace dxvk {
       const VkImageSubresourceRange&  subresources);
     
     /**
+     * \brief Clears a compressed image to black
+     *
+     * \param [in] image The image to clear
+     * \param [in] subresources Subresources to clear
+     */
+    void clearCompressedColorImage(
+      const Rc<DxvkImage>&            image,
+      const VkImageSubresourceRange&  subresources);
+    
+    /**
      * \brief Clears an active render target
      * 
      * \param [in] imageView Render target view to clear
@@ -264,6 +308,24 @@ namespace dxvk {
             VkDeviceSize          numBytes);
     
     /**
+     * \brief Copies overlapping buffer region
+     * 
+     * Can be used to copy potentially overlapping
+     * buffer regions within the same buffer. If
+     * the source and destination regions do not
+     * overlap, it will behave as \ref copyBuffer.
+     * \param [in] dstBuffer The buffer
+     * \param [in] dstOffset Offset of target region
+     * \param [in] srcOffset Offset of source region
+     * \param [in] numBytes Number of bytes to copy
+     */
+    void copyBufferRegion(
+      const Rc<DxvkBuffer>&       dstBuffer,
+            VkDeviceSize          dstOffset,
+            VkDeviceSize          srcOffset,
+            VkDeviceSize          numBytes);
+    
+    /**
      * \brief Copies data from a buffer to an image
      * 
      * \param [in] dstImage Destination image
@@ -304,6 +366,22 @@ namespace dxvk {
             VkExtent3D            extent);
     
     /**
+     * \brief Copies overlapping image region
+     *
+     * \param [in] dstImage The image
+     * \param [in] dstSubresource The image subresource
+     * \param [in] dstOffset Destination region offset
+     * \param [in] srcOffset Source region offset
+     * \param [in] extent Size of the copy region
+     */
+    void copyImageRegion(
+      const Rc<DxvkImage>&        dstImage,
+            VkImageSubresourceLayers dstSubresource,
+            VkOffset3D            dstOffset,
+            VkOffset3D            srcOffset,
+            VkExtent3D            extent);
+    
+    /**
      * \brief Copies data from an image into a buffer
      * 
      * \param [in] dstBuffer Destination buffer
@@ -324,6 +402,30 @@ namespace dxvk {
             VkExtent3D            srcExtent);
     
     /**
+     * \brief Packs depth-stencil image data to a buffer
+     * 
+     * Packs data from both the depth and stencil aspects
+     * of an image into a buffer. The supported formats are:
+     * - \c VK_FORMAT_D24_UNORM_S8_UINT: 0xssdddddd
+     * - \c VK_FORMAT_D32_SFLOAT_S8_UINT: 0xdddddddd 0x000000ss
+     * \param [in] dstBuffer Destination buffer
+     * \param [in] dstOffset Destination offset, in bytes
+     * \param [in] srcImage Source image
+     * \param [in] srcSubresource Source subresource
+     * \param [in] srcOffset Source area offset
+     * \param [in] srcExtent Source area size
+     * \param [in] format Packed data format
+     */
+    void copyDepthStencilImageToPackedBuffer(
+      const Rc<DxvkBuffer>&       dstBuffer,
+            VkDeviceSize          dstOffset,
+      const Rc<DxvkImage>&        srcImage,
+            VkImageSubresourceLayers srcSubresource,
+            VkOffset2D            srcOffset,
+            VkExtent2D            srcExtent,
+            VkFormat              format);
+    
+    /**
      * \brief Discards a buffer
      * 
      * Renames the buffer in case it is currently
@@ -336,6 +438,19 @@ namespace dxvk {
       const Rc<DxvkBuffer>&       buffer);
     
     /**
+     * \brief Discards image subresources
+     * 
+     * Discards the current contents of the image
+     * and performs a fast layout transition. This
+     * may improve performance in some cases.
+     * \param [in] image The image to discard
+     * \param [in] subresources Image subresources
+     */
+    void discardImage(
+      const Rc<DxvkImage>&          image,
+            VkImageSubresourceRange subresources);
+    
+    /**
      * \brief Starts compute jobs
      * 
      * \param [in] x Number of threads in X direction
@@ -343,19 +458,19 @@ namespace dxvk {
      * \param [in] z Number of threads in Z direction
      */
     void dispatch(
-            uint32_t x,
-            uint32_t y,
-            uint32_t z);
+            uint32_t          x,
+            uint32_t          y,
+            uint32_t          z);
     
     /**
      * \brief Indirect dispatch call
      * 
      * Takes arguments from a buffer. The buffer must contain
      * a structure of the type \c VkDispatchIndirectCommand.
-     * \param [in] buffer The buffer slice
+     * \param [in] offset Draw buffer offset
      */
     void dispatchIndirect(
-      const DxvkBufferSlice&  buffer);
+            VkDeviceSize      offset);
     
     /**
      * \brief Draws primitive without using an index buffer
@@ -366,22 +481,22 @@ namespace dxvk {
      * \param [in] firstInstance First instance ID
      */
     void draw(
-            uint32_t vertexCount,
-            uint32_t instanceCount,
-            uint32_t firstVertex,
-            uint32_t firstInstance);
+            uint32_t          vertexCount,
+            uint32_t          instanceCount,
+            uint32_t          firstVertex,
+            uint32_t          firstInstance);
     
     /**
      * \brief Indirect indexed draw call
      * 
      * Takes arguments from a buffer. The structure stored
      * in the buffer must be of type \c VkDrawIndirectCommand.
-     * \param [in] buffer The buffer slice
+     * \param [in] offset Draw buffer offset
      * \param [in] count Number of dispatch calls
      * \param [in] stride Stride between dispatch calls
      */
     void drawIndirect(
-      const DxvkBufferSlice&  buffer,
+            VkDeviceSize      offset,
             uint32_t          count,
             uint32_t          stride);
     
@@ -406,14 +521,26 @@ namespace dxvk {
      * 
      * Takes arguments from a buffer. The structure type for
      * the draw buffer is \c VkDrawIndexedIndirectCommand.
-     * \param [in] buffer The buffer slice
+     * \param [in] offset Draw buffer offset
      * \param [in] count Number of dispatch calls
      * \param [in] stride Stride between dispatch calls
      */
     void drawIndexedIndirect(
-      const DxvkBufferSlice&  buffer,
+            VkDeviceSize      offset,
             uint32_t          count,
             uint32_t          stride);
+    
+    /**
+     * \brief Transform feddback draw call
+
+     * \param [in] counterBuffer Xfb counter buffer
+     * \param [in] counterDivisor Vertex stride
+     * \param [in] counterBias Counter bias
+     */
+    void drawIndirectXfb(
+      const DxvkBufferSlice&  counterBuffer,
+            uint32_t          counterDivisor,
+            uint32_t          counterBias);
     
     /**
      * \brief Generates mip maps
@@ -448,11 +575,11 @@ namespace dxvk {
      * \warning If the buffer is used by another context,
      * invalidating it will result in undefined behaviour.
      * \param [in] buffer The buffer to invalidate
-     * \param [in] slice New physical buffer slice
+     * \param [in] slice New buffer slice handle
      */
     void invalidateBuffer(
       const Rc<DxvkBuffer>&           buffer,
-      const DxvkPhysicalBufferSlice&  slice);
+      const DxvkBufferSliceHandle&    slice);
     
     /**
      * \brief Resolves a multisampled image resource
@@ -547,7 +674,17 @@ namespace dxvk {
      * \param [in] blendConstants Blend constants
      */
     void setBlendConstants(
-      const DxvkBlendConstants& blendConstants);
+            DxvkBlendConstants  blendConstants);
+    
+    /**
+     * \brief Sets depth bias
+     * 
+     * Depth bias has to be enabled explicitly in
+     * the rasterizer state to have any effect.
+     * \param [in] depthBias Depth bias values
+     */
+    void setDepthBias(
+            DxvkDepthBias       depthBias);
     
     /**
      * \brief Sets stencil reference
@@ -556,7 +693,7 @@ namespace dxvk {
      * \param [in] reference Reference value
      */
     void setStencilReference(
-      const uint32_t            reference);
+            uint32_t            reference);
     
     /**
      * \brief Sets input assembly state
@@ -618,6 +755,16 @@ namespace dxvk {
       const DxvkBlendMode&      blendMode);
     
     /**
+     * \brief Sets barrier control flags
+     *
+     * Barrier control flags can be used to control
+     * implicit synchronization of compute shaders.
+     * \param [in] control New barrier control flags
+     */
+    void setBarrierControl(
+            DxvkBarrierControlFlags control);
+    
+    /**
      * \brief Signals an event
      * \param [in] event The event
      */
@@ -636,24 +783,29 @@ namespace dxvk {
     const Rc<DxvkDevice>              m_device;
     const Rc<DxvkPipelineManager>     m_pipeMgr;
     const Rc<DxvkMetaClearObjects>    m_metaClear;
+    const Rc<DxvkMetaCopyObjects>     m_metaCopy;
     const Rc<DxvkMetaMipGenObjects>   m_metaMipGen;
+    const Rc<DxvkMetaPackObjects>     m_metaPack;
     const Rc<DxvkMetaResolveObjects>  m_metaResolve;
     
-    Rc<DxvkCommandList> m_cmd;
-    DxvkContextFlags    m_flags;
-    DxvkContextState    m_state;
+    Rc<DxvkCommandList>     m_cmd;
+    Rc<DxvkDescriptorPool>  m_descPool;
 
-    DxvkBarrierSet      m_barriers;
-    DxvkBarrierSet      m_transitions;
+    DxvkContextFlags        m_flags;
+    DxvkContextState        m_state;
+
+    DxvkBarrierSet          m_barriers;
+    DxvkBarrierSet          m_transitions;
+    DxvkBarrierControlFlags m_barrierControl;
     
-    DxvkQueryManager    m_queries;
-    
+    DxvkQueryManager        m_queries;
+
     VkPipeline m_gpActivePipeline = VK_NULL_HANDLE;
     VkPipeline m_cpActivePipeline = VK_NULL_HANDLE;
 
     VkDescriptorSet m_gpSet = VK_NULL_HANDLE;
     VkDescriptorSet m_cpSet = VK_NULL_HANDLE;
-    
+
     std::array<DxvkShaderResourceSlot, MaxNumResourceSlots>  m_rc;
     std::array<DxvkDescriptorInfo,     MaxNumActiveBindings> m_descInfos;
     std::array<uint32_t,               MaxNumActiveBindings> m_descOffsets;
@@ -670,8 +822,40 @@ namespace dxvk {
             VkExtent3D            extent,
             VkClearValue          value);
     
+    void copyImageHw(
+      const Rc<DxvkImage>&        dstImage,
+            VkImageSubresourceLayers dstSubresource,
+            VkOffset3D            dstOffset,
+      const Rc<DxvkImage>&        srcImage,
+            VkImageSubresourceLayers srcSubresource,
+            VkOffset3D            srcOffset,
+            VkExtent3D            extent);
+    
+    void copyImageFb(
+      const Rc<DxvkImage>&        dstImage,
+            VkImageSubresourceLayers dstSubresource,
+            VkOffset3D            dstOffset,
+      const Rc<DxvkImage>&        srcImage,
+            VkImageSubresourceLayers srcSubresource,
+            VkOffset3D            srcOffset,
+            VkExtent3D            extent);
+    
+    void resolveImageHw(
+      const Rc<DxvkImage>&            dstImage,
+      const VkImageSubresourceLayers& dstSubresources,
+      const Rc<DxvkImage>&            srcImage,
+      const VkImageSubresourceLayers& srcSubresources);
+    
+    void resolveImageFb(
+      const Rc<DxvkImage>&            dstImage,
+      const VkImageSubresourceLayers& dstSubresources,
+      const Rc<DxvkImage>&            srcImage,
+      const VkImageSubresourceLayers& srcSubresources,
+            VkFormat                  format);
+    
     void startRenderPass();
     void spillRenderPass();
+    void clearRenderPass();
     
     void renderPassBindFramebuffer(
       const Rc<DxvkFramebuffer>&  framebuffer,
@@ -684,6 +868,9 @@ namespace dxvk {
     void resetRenderPassOps(
       const DxvkRenderTargets&    renderTargets,
             DxvkRenderPassOps&    renderPassOps);
+    
+    void startTransformFeedback();
+    void pauseTransformFeedback();
     
     void unbindComputePipeline();
     void updateComputePipeline();
@@ -701,11 +888,11 @@ namespace dxvk {
     
     void updateShaderResources(
             VkPipelineBindPoint     bindPoint,
+            DxvkBindingMask&        bindMask,
       const DxvkPipelineLayout*     layout);
     
     VkDescriptorSet updateShaderDescriptors(
             VkPipelineBindPoint     bindPoint,
-      const DxvkBindingState&       bindingState,
       const DxvkPipelineLayout*     layout);
     
     void updateShaderDescriptorSetBinding(
@@ -717,6 +904,9 @@ namespace dxvk {
     
     void updateIndexBufferBinding();
     void updateVertexBufferBindings();
+    
+    void updateTransformFeedbackBuffers();
+    void updateTransformFeedbackState();
 
     void updateDynamicState();
     
@@ -724,12 +914,23 @@ namespace dxvk {
     bool validateGraphicsState();
     
     void commitComputeState();
-    void commitGraphicsState();
+    void commitGraphicsState(bool indexed);
     
     void commitComputeInitBarriers();
     void commitComputePostBarriers();
     
-    Rc<DxvkBuffer> getTransferBuffer(VkDeviceSize size);
+    void commitGraphicsPostBarriers();
+
+    void emitMemoryBarrier(
+            VkPipelineStageFlags      srcStages,
+            VkAccessFlags             srcAccess,
+            VkPipelineStageFlags      dstStages,
+            VkAccessFlags             dstAccess);
+    
+    VkDescriptorSet allocateDescriptorSet(
+            VkDescriptorSetLayout     layout);
+
+    void trackDrawBuffer();
     
   };
   

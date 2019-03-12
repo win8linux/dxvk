@@ -8,7 +8,6 @@ namespace dxvk {
   
   class DxvkDevice;
   class DxvkInstance;
-  class DxvkSurface;
   
   /**
    * \brief GPU vendors
@@ -18,6 +17,29 @@ namespace dxvk {
     Amd    = 0x1002,
     Nvidia = 0x10de,
     Intel  = 0x8086,
+  };
+
+  /**
+   * \brief Adapter memory heap info
+   * 
+   * Stores info about a heap, and the amount
+   * of memory allocated from it by the app.
+   */
+  struct DxvkAdapterMemoryHeapInfo {
+    VkMemoryHeapFlags heapFlags;
+    VkDeviceSize memoryAvailable;
+    VkDeviceSize memoryAllocated;
+  };
+
+  /**
+   * \brief Adapter memory info
+   * 
+   * Stores properties and allocation
+   * info of each available heap.
+   */
+  struct DxvkAdapterMemoryInfo {
+    uint32_t                  heapCount;
+    DxvkAdapterMemoryHeapInfo heaps[VK_MAX_MEMORY_HEAPS];
   };
   
   /**
@@ -32,7 +54,7 @@ namespace dxvk {
   public:
     
     DxvkAdapter(
-      const Rc<DxvkInstance>&   instance,
+            DxvkInstance*       instance,
             VkPhysicalDevice    handle);
     ~DxvkAdapter();
     
@@ -92,6 +114,17 @@ namespace dxvk {
     }
     
     /**
+     * \brief Retrieves memory heap info
+     * 
+     * Returns properties of all available memory heaps,
+     * both device-local and non-local heaps, and the
+     * amount of memory allocated from those heaps by
+     * logical devices.
+     * \returns Memory heap info
+     */
+    DxvkAdapterMemoryInfo getMemoryHeapInfo() const;
+    
+    /**
      * \brief Memory properties
      * 
      * Queries the memory types and memory heaps of
@@ -99,7 +132,7 @@ namespace dxvk {
      * \returns Device memory properties
      */
     VkPhysicalDeviceMemoryProperties memoryProperties() const;
-    
+
     /**
      * \brief Queries format support
      * 
@@ -150,25 +183,65 @@ namespace dxvk {
       const DxvkDeviceFeatures& required) const;
     
     /**
+     * \brief Enables extensions for this adapter
+     *
+     * When creating a device, all extensions that
+     * are added using this method will be enabled
+     * in addition to the ones required by DXVK.
+     * This is used for OpenVR support.
+     */
+    void enableExtensions(
+      const DxvkNameSet&        extensions);
+    
+    /**
      * \brief Creates a DXVK device
      * 
      * Creates a logical device for this adapter.
+     * \param [in] clientApi Name of the client API
      * \param [in] enabledFeatures Device features
      * \returns Device handle
      */
     Rc<DxvkDevice> createDevice(
+            std::string         clientApi,
             DxvkDeviceFeatures  enabledFeatures);
     
     /**
-     * \brief Creates a surface
+     * \brief Registers memory allocation
      * 
-     * \param [in] instance Module instance
-     * \param [in] window Application window
-     * \returns Surface handle
+     * Updates memory alloc info accordingly.
+     * \param [in] heap Memory heap index
+     * \param [in] bytes Allocation size
      */
-    Rc<DxvkSurface> createSurface(
-      HINSTANCE instance,
-      HWND      window);
+    void notifyHeapMemoryAlloc(
+            uint32_t            heap,
+            VkDeviceSize        bytes);
+    
+    /**
+     * \brief Registers memory deallocation
+     * 
+     * Updates memory alloc info accordingly.
+     * \param [in] heap Memory heap index
+     * \param [in] bytes Allocation size
+     */
+    void notifyHeapMemoryFree(
+            uint32_t            heap,
+            VkDeviceSize        bytes);
+    
+    /**
+     * \brief Tests if the driver matches certain criteria
+     *
+     * \param [in] vendor GPU vendor
+     * \param [in] driver Driver. Ignored when the
+     *    driver properties extension is not supported.
+     * \param [in] minVer Match versions starting with this one
+     * \param [in] maxVer Match versions lower than this one
+     * \returns \c True if the driver matches these criteria
+     */
+    bool matchesDriver(
+            DxvkGpuVendor       vendor,
+            VkDriverIdKHR       driver,
+            uint32_t            minVer,
+            uint32_t            maxVer) const;
     
     /**
      * \brief Logs DXVK adapter info
@@ -180,23 +253,27 @@ namespace dxvk {
     
   private:
     
-    Rc<DxvkInstance>    m_instance;
+    DxvkInstance*       m_instance;
     Rc<vk::InstanceFn>  m_vki;
     VkPhysicalDevice    m_handle;
 
+    DxvkNameSet         m_extraExtensions;
     DxvkNameSet         m_deviceExtensions;
     DxvkDeviceInfo      m_deviceInfo;
     DxvkDeviceFeatures  m_deviceFeatures;
+
+    bool                m_hasMemoryBudget;
     
     std::vector<VkQueueFamilyProperties> m_queueFamilies;
 
+    std::array<std::atomic<VkDeviceSize>, VK_MAX_MEMORY_HEAPS> m_heapAlloc;
+
+    void initHeapAllocInfo();
     void queryExtensions();
     void queryDeviceInfo();
     void queryDeviceFeatures();
     void queryDeviceQueues();
     
-    uint32_t getAdapterIndex() const;
-
     static void logNameList(const DxvkNameList& names);
     
   };

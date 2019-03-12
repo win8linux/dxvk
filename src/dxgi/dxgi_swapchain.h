@@ -3,12 +3,8 @@
 #include <memory>
 #include <mutex>
 
-#include <dxvk_surface.h>
-#include <dxvk_swapchain.h>
-
 #include "dxgi_interfaces.h"
 #include "dxgi_object.h"
-#include "dxgi_presenter.h"
 
 #include "../d3d11/d3d11_interfaces.h"
 
@@ -20,13 +16,13 @@ namespace dxvk {
   class DxgiFactory;
   class DxgiOutput;
   
-  class DxgiSwapChain : public DxgiObject<IDXGISwapChain1> {
+  class DxgiSwapChain : public DxgiObject<IDXGISwapChain3> {
     
   public:
     
     DxgiSwapChain(
-            DxgiFactory*                pFactory,
-            IUnknown*                   pDevice,
+            IDXGIFactory*               pFactory,
+            IDXGIVkSwapChain*           pPresenter,
             HWND                        hWnd,
       const DXGI_SWAP_CHAIN_DESC1*      pDesc,
       const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc);
@@ -50,6 +46,8 @@ namespace dxvk {
             REFIID                    riid,
             void**                    ppSurface) final;
     
+    UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() final;
+
     HRESULT STDMETHODCALLTYPE GetContainingOutput(
             IDXGIOutput**             ppOutput) final;
     
@@ -106,6 +104,15 @@ namespace dxvk {
             DXGI_FORMAT               NewFormat,
             UINT                      SwapChainFlags) final;
     
+    HRESULT STDMETHODCALLTYPE ResizeBuffers1(
+            UINT                      BufferCount,
+            UINT                      Width,
+            UINT                      Height,
+            DXGI_FORMAT               Format,
+            UINT                      SwapChainFlags,
+      const UINT*                     pCreationNodeMask,
+            IUnknown* const*          ppPresentQueue) final;
+
     HRESULT STDMETHODCALLTYPE ResizeTarget(
       const DXGI_MODE_DESC*           pNewTargetParameters) final;
     
@@ -118,11 +125,39 @@ namespace dxvk {
 
     HRESULT STDMETHODCALLTYPE SetRotation(
             DXGI_MODE_ROTATION        Rotation) final;
-
-    HRESULT SetGammaControl(
-      const DXGI_GAMMA_CONTROL*       pGammaControl);
     
-    HRESULT SetDefaultGammaControl();
+    HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() final;
+
+    HRESULT STDMETHODCALLTYPE GetMatrixTransform(
+            DXGI_MATRIX_3X2_F*        pMatrix) final;
+    
+    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(
+            UINT*                     pMaxLatency) final;
+    
+    HRESULT STDMETHODCALLTYPE GetSourceSize(
+            UINT*                     pWidth,
+            UINT*                     pHeight) final;
+    
+    HRESULT STDMETHODCALLTYPE SetMatrixTransform(
+      const DXGI_MATRIX_3X2_F*        pMatrix) final;
+    
+    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(
+            UINT                      MaxLatency) final;
+
+    HRESULT STDMETHODCALLTYPE SetSourceSize(
+            UINT                      Width,
+            UINT                      Height) final;
+    
+    HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(
+            DXGI_COLOR_SPACE_TYPE     ColorSpace,
+            UINT*                     pColorSpaceSupport) final;
+
+    HRESULT STDMETHODCALLTYPE SetColorSpace1(
+            DXGI_COLOR_SPACE_TYPE     ColorSpace) final;
+    
+    HRESULT STDMETHODCALLTYPE SetGammaControl(
+            UINT                      NumPoints,
+      const DXGI_RGB*                 pGammaCurve);
     
   private:
     
@@ -135,26 +170,18 @@ namespace dxvk {
     std::mutex                      m_lockWindow;
     std::mutex                      m_lockBuffer;
 
-    Com<DxgiFactory>                m_factory;
-    Com<DxgiAdapter>                m_adapter;
-    Com<DxgiDevice>                 m_device;
-    Com<IDXGIVkPresenter>           m_presentDevice;
+    Com<IDXGIFactory>               m_factory;
+    Com<IDXGIAdapter>               m_adapter;
     
     HWND                            m_window;
     DXGI_SWAP_CHAIN_DESC1           m_desc;
     DXGI_SWAP_CHAIN_FULLSCREEN_DESC m_descFs;
     DXGI_FRAME_STATISTICS           m_stats;
     
-    Rc<DxgiVkPresenter>             m_presenter;
-    Com<IDXGIVkBackBuffer>          m_backBuffer;
+    Com<IDXGIVkSwapChain>           m_presenter;
     
     HMONITOR                        m_monitor;
     WindowState                     m_windowState;
-    
-    HRESULT CreatePresenter();
-    HRESULT CreateBackBuffer();
-    
-    VkExtent2D GetWindowSize() const;
     
     HRESULT EnterFullscreenMode(
             IDXGIOutput             *pTarget);
@@ -166,11 +193,15 @@ namespace dxvk {
       const DXGI_MODE_DESC*         pDisplayMode);
     
     HRESULT RestoreDisplayMode(
-            IDXGIOutput*            pOutput);
+            HMONITOR                hMonitor);
     
     HRESULT GetSampleCount(
             UINT                    Count,
             VkSampleCountFlagBits*  pCount) const;
+    
+    HRESULT GetOutputFromMonitor(
+            HMONITOR                Monitor,
+            IDXGIOutput**           ppOutput);
     
   };
   

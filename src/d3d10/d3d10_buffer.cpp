@@ -90,7 +90,7 @@ namespace dxvk {
   }
 
 
-  void STDMETHODCALLTYPE D3D10Buffer::Unmap() {
+  void STDMETHODCALLTYPE D3D10Buffer::Unmap() {    
     Com<ID3D11DeviceContext> ctx;
     GetD3D11Context(m_d3d11, &ctx);
 

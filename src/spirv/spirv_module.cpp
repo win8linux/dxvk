@@ -419,6 +419,16 @@ namespace dxvk {
   }
   
   
+  void SpirvModule::decorateIndex(
+          uint32_t                object,
+          uint32_t                index) {
+    m_annotations.putIns  (spv::OpDecorate, 4);
+    m_annotations.putWord (object);
+    m_annotations.putWord (spv::DecorationIndex);
+    m_annotations.putInt32(index);
+  }
+
+
   void SpirvModule::decorateLocation(
           uint32_t                object,
           uint32_t                location) {
@@ -436,6 +446,34 @@ namespace dxvk {
     m_annotations.putWord (object);
     m_annotations.putWord (spv::DecorationSpecId);
     m_annotations.putInt32(specId);
+  }
+  
+
+  void SpirvModule::decorateXfb(
+          uint32_t                object,
+          uint32_t                streamId,
+          uint32_t                bufferId,
+          uint32_t                offset,
+          uint32_t                stride) {
+    m_annotations.putIns  (spv::OpDecorate, 4);
+    m_annotations.putWord (object);
+    m_annotations.putWord (spv::DecorationStream);
+    m_annotations.putInt32(streamId);
+
+    m_annotations.putIns  (spv::OpDecorate, 4);
+    m_annotations.putWord (object);
+    m_annotations.putWord (spv::DecorationXfbBuffer);
+    m_annotations.putInt32(bufferId);
+
+    m_annotations.putIns  (spv::OpDecorate, 4);
+    m_annotations.putWord (object);
+    m_annotations.putWord (spv::DecorationXfbStride);
+    m_annotations.putInt32(stride);
+
+    m_annotations.putIns  (spv::OpDecorate, 4);
+    m_annotations.putWord (object);
+    m_annotations.putWord (spv::DecorationOffset);
+    m_annotations.putInt32(offset);
   }
   
   
@@ -715,6 +753,21 @@ namespace dxvk {
     
     for (uint32_t i = 0; i < indexCount; i++)
       m_code.putInt32(indexArray[i]);
+    return resultId;
+  }
+
+
+  uint32_t SpirvModule::opArrayLength(
+          uint32_t                resultType,
+          uint32_t                structure,
+          uint32_t                memberId) {
+    uint32_t resultId = this->allocateId();
+    
+    m_code.putIns (spv::OpArrayLength, 5);
+    m_code.putWord(resultType);
+    m_code.putWord(resultId);
+    m_code.putWord(structure);
+    m_code.putWord(memberId);
     return resultId;
   }
   
@@ -2834,6 +2887,60 @@ namespace dxvk {
   }
   
   
+  uint32_t SpirvModule::opGroupNonUniformBallot(
+          uint32_t                resultType,
+          uint32_t                execution,
+          uint32_t                predicate) {
+    uint32_t resultId = this->allocateId();
+
+    m_code.putIns(spv::OpGroupNonUniformBallot, 5);
+    m_code.putWord(resultType);
+    m_code.putWord(resultId);
+    m_code.putWord(execution);
+    m_code.putWord(predicate);
+    return resultId;
+  }
+
+  
+  uint32_t SpirvModule::opGroupNonUniformBallotBitCount(
+          uint32_t                resultType,
+          uint32_t                execution,
+          uint32_t                operation,
+          uint32_t                ballot) {
+    uint32_t resultId = this->allocateId();
+
+    m_code.putIns(spv::OpGroupNonUniformBallotBitCount, 6);
+    m_code.putWord(resultType);
+    m_code.putWord(resultId);
+    m_code.putWord(execution);
+    m_code.putWord(operation);
+    m_code.putWord(ballot);
+    return resultId;
+  }
+
+
+  uint32_t SpirvModule::opGroupNonUniformLogicalAnd(
+          uint32_t                resultType,
+          uint32_t                execution,
+          uint32_t                operation,
+          uint32_t                value,
+          uint32_t                clusterSize) {
+    uint32_t resultId = this->allocateId();
+
+    m_code.putIns(spv::OpGroupNonUniformLogicalAnd,
+      6 + (clusterSize ? 1 : 0));
+    m_code.putWord(resultType);
+    m_code.putWord(resultId);
+    m_code.putWord(execution);
+    m_code.putWord(operation);
+    m_code.putWord(value);
+
+    if (clusterSize)
+      m_code.putWord(clusterSize);
+    return resultId;
+  }
+
+
   void SpirvModule::opControlBarrier(
           uint32_t                execution,
           uint32_t                memory,
@@ -2937,13 +3044,25 @@ namespace dxvk {
   }
   
   
-  void SpirvModule::opEmitVertex() {
-    m_code.putIns (spv::OpEmitVertex, 1);
+  void SpirvModule::opEmitVertex(
+          uint32_t                streamId) {
+    if (streamId == 0) {
+      m_code.putIns (spv::OpEmitVertex, 1);
+    } else {
+      m_code.putIns (spv::OpEmitStreamVertex, 2);
+      m_code.putWord(streamId);
+    }
   }
   
   
-  void SpirvModule::opEndPrimitive() {
-    m_code.putIns (spv::OpEndPrimitive, 1);
+  void SpirvModule::opEndPrimitive(
+          uint32_t                streamId) {
+    if (streamId == 0) {
+      m_code.putIns (spv::OpEndPrimitive, 1);
+    } else {
+      m_code.putIns (spv::OpEndStreamPrimitive, 2);
+      m_code.putWord(streamId);
+    }
   }
   
   

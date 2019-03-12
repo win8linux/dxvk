@@ -1,6 +1,6 @@
 #pragma once
 
-#include <set>
+#include <map>
 #include <vector>
 
 #include "dxvk_include.h"
@@ -60,7 +60,15 @@ namespace dxvk {
      * \returns \c true if the extension is enabled
      */
     operator bool () const {
-      return m_enabled;
+      return m_revision != 0;
+    }
+
+    /**
+     * \brief Supported revision
+     * \returns Supported revision
+     */
+    uint32_t revision() const {
+      return m_revision;
     }
 
     /**
@@ -76,15 +84,15 @@ namespace dxvk {
     /**
      * \brief Enables the extension
      */
-    void enable() {
-      m_enabled = true;
+    void enable(uint32_t revision) {
+      m_revision = revision;
     }
 
   private:
 
-    const char* m_name    = nullptr;
-    DxvkExtMode m_mode    = DxvkExtMode::Disabled;
-    bool        m_enabled = false;
+    const char* m_name     = nullptr;
+    DxvkExtMode m_mode     = DxvkExtMode::Disabled;
+    uint32_t    m_revision = 0;
 
   };
 
@@ -175,9 +183,9 @@ namespace dxvk {
      * \brief Checks whether an extension is supported
      * 
      * \param [in] pName Extension name
-     * \returns \c true if the extension is supported
+     * \returns Supported revision, or zero
      */
-    bool supports(
+    uint32_t supports(
       const char*             pName) const;
     
     /**
@@ -238,7 +246,7 @@ namespace dxvk {
 
   private:
 
-    std::set<std::string> m_names;
+    std::map<std::string, uint32_t> m_names;
 
   };
 
@@ -249,10 +257,15 @@ namespace dxvk {
    * used by DXVK if supported by the implementation.
    */
   struct DxvkDeviceExtensions {
+    DxvkExt amdMemoryOverallocationBehaviour= { VK_AMD_MEMORY_OVERALLOCATION_BEHAVIOR_EXTENSION_NAME,   DxvkExtMode::Optional };
+    DxvkExt extDepthClipEnable              = { VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME,                DxvkExtMode::Optional };
+    DxvkExt extMemoryPriority               = { VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME,                  DxvkExtMode::Optional };
     DxvkExt extShaderViewportIndexLayer     = { VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME,      DxvkExtMode::Optional };
+    DxvkExt extTransformFeedback            = { VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME,               DxvkExtMode::Optional };
     DxvkExt extVertexAttributeDivisor       = { VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME,         DxvkExtMode::Optional };
     DxvkExt khrDedicatedAllocation          = { VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,             DxvkExtMode::Required };
     DxvkExt khrDescriptorUpdateTemplate     = { VK_KHR_DESCRIPTOR_UPDATE_TEMPLATE_EXTENSION_NAME,       DxvkExtMode::Required };
+    DxvkExt khrDriverProperties             = { VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME,                DxvkExtMode::Optional };
     DxvkExt khrGetMemoryRequirements2       = { VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,        DxvkExtMode::Required };
     DxvkExt khrImageFormatList              = { VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,                DxvkExtMode::Required };
     DxvkExt khrMaintenance1                 = { VK_KHR_MAINTENANCE1_EXTENSION_NAME,                     DxvkExtMode::Required };

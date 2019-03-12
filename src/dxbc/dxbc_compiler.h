@@ -122,6 +122,17 @@ namespace dxvk {
     uint32_t labelElse = 0;
     uint32_t labelEnd  = 0;
   };
+
+
+  struct DxbcXfbVar {
+    uint32_t    varId     = 0;
+    uint32_t    streamId  = 0;
+    uint32_t    outputId  = 0;
+    DxbcRegMask srcMask   = 0;
+    DxbcRegMask dstMask   = 0;
+    uint32_t    location  = 0;
+    uint32_t    component = 0;
+  };
   
   
   /**
@@ -167,6 +178,7 @@ namespace dxvk {
     uint32_t builtinLayer         = 0;
     uint32_t builtinViewportId    = 0;
     
+    uint32_t invocationMask       = 0;
     uint32_t killState            = 0;
   };
   
@@ -176,6 +188,10 @@ namespace dxvk {
    */
   struct DxbcCompilerCsPart {
     uint32_t functionId = 0;
+
+    uint32_t workgroupSizeX               = 0;
+    uint32_t workgroupSizeY               = 0;
+    uint32_t workgroupSizeZ               = 0;
     
     uint32_t builtinGlobalInvocationId    = 0;
     uint32_t builtinLocalInvocationId     = 0;
@@ -246,6 +262,8 @@ namespace dxvk {
     
     uint32_t invocationBlockBegin  = 0;
     uint32_t invocationBlockEnd    = 0;
+
+    uint32_t outputPerPatchMask    = 0;
     
     DxbcCompilerHsControlPointPhase          cpPhase;
     std::vector<DxbcCompilerHsForkJoinPhase> forkPhases;
@@ -356,9 +374,10 @@ namespace dxvk {
     DxbcCompiler(
       const std::string&        fileName,
       const DxbcModuleInfo&     moduleInfo,
-      const DxbcProgramVersion& version,
+      const DxbcProgramInfo&    programInfo,
       const Rc<DxbcIsgn>&       isgn,
       const Rc<DxbcIsgn>&       osgn,
+      const Rc<DxbcIsgn>&       psgn,
       const DxbcAnalysisInfo&   analysis);
     ~DxbcCompiler();
     
@@ -370,6 +389,15 @@ namespace dxvk {
       const DxbcShaderInstruction&  ins);
     
     /**
+     * \brief Emits transform feedback passthrough
+     * 
+     * Writes all captured input variables to the
+     * corresponding xfb outputs, and sets up the
+     * geometry shader for point-to-point mode.
+     */
+    void processXfbPassthrough();
+    
+    /**
      * \brief Finalizes the shader
      * \returns The final shader object
      */
@@ -378,11 +406,12 @@ namespace dxvk {
   private:
     
     DxbcModuleInfo      m_moduleInfo;
-    DxbcProgramVersion  m_version;
+    DxbcProgramInfo     m_programInfo;
     SpirvModule         m_module;
     
     Rc<DxbcIsgn>        m_isgn;
     Rc<DxbcIsgn>        m_osgn;
+    Rc<DxbcIsgn>        m_psgn;
     
     const DxbcAnalysisInfo* m_analysis;
     
@@ -417,6 +446,10 @@ namespace dxvk {
       DxbcRegisterPointer,
       DxbcMaxInterfaceRegs>     m_oRegs;
     std::vector<DxbcSvMapping>  m_oMappings;
+
+    /////////////////////////////////////////////
+    // xfb output registers for geometry shaders
+    std::vector<DxbcXfbVar> m_xfbVars;
     
     //////////////////////////////////////////////////////
     // Shader resource variables. These provide access to
@@ -486,7 +519,7 @@ namespace dxvk {
     // Inter-stage shader interface slots. Also
     // covers vertex input and fragment output.
     DxvkInterfaceSlots m_interfaceSlots;
-    
+
     ///////////////////////////////////
     // Shader-specific data structures
     DxbcCompilerVsPart m_vs;
@@ -834,6 +867,13 @@ namespace dxvk {
             DxbcRegisterValue       value,
             DxbcOpModifiers         modifiers);
     
+    ////////////////////////////////
+    // Pointer manipulation methods
+    DxbcRegisterPointer emitArrayAccess(
+            DxbcRegisterPointer     pointer,
+            spv::StorageClass       sclass,
+            uint32_t                index);
+
     ///////////////////////////////////////
     // Image register manipulation methods
     uint32_t emitLoadSampledImage(
@@ -882,6 +922,9 @@ namespace dxvk {
     
     //////////////////////////
     // Resource query methods
+    DxbcRegisterValue emitQueryBufferSize(
+      const DxbcRegister&           resource);
+    
     DxbcRegisterValue emitQueryTexelBufferSize(
       const DxbcRegister&           resource);
     
@@ -929,6 +972,10 @@ namespace dxvk {
     DxbcRegisterValue emitRegisterLoadRaw(
       const DxbcRegister&           reg);
     
+    DxbcRegisterValue emitConstantBufferLoad(
+      const DxbcRegister&           reg,
+            DxbcRegMask             writeMask);
+    
     DxbcRegisterValue emitRegisterLoad(
       const DxbcRegister&           reg,
             DxbcRegMask             writeMask);
@@ -952,7 +999,10 @@ namespace dxvk {
     
     void emitOutputSetup();
     void emitOutputMapping();
+    void emitOutputDepthClamp();
     
+    void emitInitWorkgroupMemory();
+
     //////////////////////////////////////////
     // System value load methods (per shader)
     DxbcRegisterValue emitVsSystemValueLoad(
@@ -965,10 +1015,6 @@ namespace dxvk {
             uint32_t                vertexId);
     
     DxbcRegisterValue emitPsSystemValueLoad(
-            DxbcSystemValue         sv,
-            DxbcRegMask             mask);
-    
-    DxbcRegisterValue emitCsSystemValueLoad(
             DxbcSystemValue         sv,
             DxbcRegMask             mask);
     
@@ -1046,6 +1092,14 @@ namespace dxvk {
     void emitGsFinalize();
     void emitPsFinalize();
     void emitCsFinalize();
+
+    ///////////////////////
+    // Xfb related methods
+    void emitXfbOutputDeclarations();
+
+    void emitXfbOutputSetup(
+            uint32_t                          streamId,
+            bool                              passthrough);
     
     ///////////////////////////////
     // Hull shader phase methods
@@ -1061,6 +1115,8 @@ namespace dxvk {
             uint32_t                          count);
     
     void emitHsInvocationBlockEnd();
+
+    void emitHsOutputSetup();
     
     uint32_t emitTessInterfacePerPatch(
             spv::StorageClass                 storageClass);

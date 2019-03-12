@@ -2,17 +2,16 @@
 
 #include <limits>
 
-#include "dxvk_binding.h"
+#include "dxvk_bind_mask.h"
 #include "dxvk_buffer.h"
 #include "dxvk_descriptor.h"
-#include "dxvk_event_tracker.h"
+#include "dxvk_event.h"
 #include "dxvk_lifetime.h"
 #include "dxvk_limits.h"
 #include "dxvk_pipelayout.h"
 #include "dxvk_query_tracker.h"
 #include "dxvk_staging.h"
 #include "dxvk_stats.h"
-#include "dxvk_sync.h"
 
 namespace dxvk {
   
@@ -43,7 +42,6 @@ namespace dxvk {
   public:
     
     DxvkCommandList(
-      const Rc<vk::DeviceFn>& vkd,
             DxvkDevice*       device,
             uint32_t          queueFamily);
     ~DxvkCommandList();
@@ -110,17 +108,17 @@ namespace dxvk {
     void endRecording();
     
     /**
-     * \brief Frees physical buffer slice
+     * \brief Frees buffer slice
      * 
      * After the command buffer execution has finished,
-     * the given physical slice will be released to the
+     * the given buffer slice will be released to the
      * virtual buffer object so that it can be reused.
      * \param [in] buffer The virtual buffer object
-     * \param [in] slice The physical buffer slice
+     * \param [in] slice The buffer slice handle
      */
-    void freePhysicalBufferSlice(
+    void freeBufferSlice(
       const Rc<DxvkBuffer>&           buffer,
-      const DxvkPhysicalBufferSlice&  slice) {
+      const DxvkBufferSliceHandle&    slice) {
       m_bufferTracker.freeBufferSlice(buffer, slice);
     }
     
@@ -132,8 +130,8 @@ namespace dxvk {
      * the device can guarantee that the submission has
      * completed.
      */
-    void trackResource(const Rc<DxvkResource>& rc) {
-      m_resources.trackResource(rc);
+    void trackResource(Rc<DxvkResource> rc) {
+      m_resources.trackResource(std::move(rc));
     }
     
     /**
@@ -156,6 +154,14 @@ namespace dxvk {
      */
     void trackEvent(const DxvkEventRevision& event) {
       m_eventTracker.trackEvent(event);
+    }
+
+    /**
+     * \brief Tracks a descriptor pool
+     * \param [in] pool The descriptor pool
+     */
+    void trackDescriptorPool(Rc<DxvkDescriptorPool> pool) {
+      m_descriptorPoolTracker.trackDescriptorPool(pool);
     }
     
     /**
@@ -189,12 +195,6 @@ namespace dxvk {
      */
     void reset();
     
-    VkDescriptorSet allocateDescriptorSet(
-            VkDescriptorSetLayout   descriptorLayout) {
-      return m_descAlloc.alloc(descriptorLayout);
-    }
-    
-    
     void updateDescriptorSets(
             uint32_t                      descriptorWriteCount,
       const VkWriteDescriptorSet*         pDescriptorWrites) {
@@ -222,11 +222,31 @@ namespace dxvk {
     }
     
     
+    void cmdBeginQueryIndexed(
+            VkQueryPool             queryPool,
+            uint32_t                query,
+            VkQueryControlFlags     flags,
+            uint32_t                index) {
+      m_vkd->vkCmdBeginQueryIndexedEXT(
+        m_execBuffer, queryPool, query, flags, index);
+    }
+    
+    
     void cmdBeginRenderPass(
       const VkRenderPassBeginInfo*  pRenderPassBegin,
             VkSubpassContents       contents) {
       m_vkd->vkCmdBeginRenderPass(m_execBuffer,
         pRenderPassBegin, contents);
+    }
+
+
+    void cmdBeginTransformFeedback(
+            uint32_t                  firstBuffer,
+            uint32_t                  bufferCount,
+      const VkBuffer*                 counterBuffers,
+      const VkDeviceSize*             counterOffsets) {
+      m_vkd->vkCmdBeginTransformFeedbackEXT(m_execBuffer,
+        firstBuffer, bufferCount, counterBuffers, counterOffsets);
     }
     
     
@@ -256,6 +276,17 @@ namespace dxvk {
             VkPipeline              pipeline) {
       m_vkd->vkCmdBindPipeline(m_execBuffer,
         pipelineBindPoint, pipeline);
+    }
+
+
+    void cmdBindTransformFeedbackBuffers(
+            uint32_t                firstBinding,
+            uint32_t                bindingCount,
+      const VkBuffer*               pBuffers,
+      const VkDeviceSize*           pOffsets,
+      const VkDeviceSize*           pSizes) {
+      m_vkd->vkCmdBindTransformFeedbackBuffersEXT(m_execBuffer,
+        firstBinding, bindingCount, pBuffers, pOffsets, pSizes);
     }
     
     
@@ -426,12 +457,34 @@ namespace dxvk {
       m_vkd->vkCmdDrawIndexedIndirect(m_execBuffer,
         buffer, offset, drawCount, stride);
     }
+
+
+    void cmdDrawIndirectVertexCount(
+            uint32_t                instanceCount,
+            uint32_t                firstInstance,
+            VkBuffer                counterBuffer,
+            VkDeviceSize            counterBufferOffset,
+            uint32_t                counterOffset,
+            uint32_t                vertexStride) {
+      m_vkd->vkCmdDrawIndirectByteCountEXT(m_execBuffer,
+        instanceCount, firstInstance, counterBuffer,
+        counterBufferOffset, counterOffset, vertexStride);
+    }
     
     
     void cmdEndQuery(
             VkQueryPool             queryPool,
             uint32_t                query) {
       m_vkd->vkCmdEndQuery(m_execBuffer, queryPool, query);
+    }
+
+
+    void cmdEndQueryIndexed(
+            VkQueryPool             queryPool,
+            uint32_t                query,
+            uint32_t                index) {
+      m_vkd->vkCmdEndQueryIndexedEXT(
+        m_execBuffer, queryPool, query, index);
     }
     
     
@@ -440,6 +493,16 @@ namespace dxvk {
     }
     
     
+    void cmdEndTransformFeedback(
+            uint32_t                  firstBuffer,
+            uint32_t                  bufferCount,
+      const VkBuffer*                 counterBuffers,
+      const VkDeviceSize*             counterOffsets) {
+      m_vkd->vkCmdEndTransformFeedbackEXT(m_execBuffer,
+        firstBuffer, bufferCount, counterBuffers, counterOffsets);
+    }
+
+
     void cmdFillBuffer(
             VkBuffer                dstBuffer,
             VkDeviceSize            dstOffset,
@@ -594,7 +657,7 @@ namespace dxvk {
     
     DxvkCmdBufferFlags  m_cmdBuffersUsed;
     DxvkLifetimeTracker m_resources;
-    DxvkDescriptorAlloc m_descAlloc;
+    DxvkDescriptorPoolTracker m_descriptorPoolTracker;
     DxvkStagingAlloc    m_stagingAlloc;
     DxvkQueryTracker    m_queryTracker;
     DxvkEventTracker    m_eventTracker;

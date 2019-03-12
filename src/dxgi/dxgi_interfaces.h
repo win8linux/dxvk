@@ -10,25 +10,55 @@ namespace dxvk {
   class DxvkAdapter;
   class DxvkBuffer;
   class DxvkDevice;
+  class DxvkEvent;
   class DxvkImage;
 }
 
 struct IDXGIVkInteropDevice;
 
 /**
- * \brief Private DXGI device interface
+ * \brief Private DXGI presenter
  * 
- * The implementation of \c IDXGIDevice stores a
- * \ref DxvkDevice which can be retrieved using
- * this interface.
+ * Presenter interface that allows the DXGI swap
+ * chain implementation to remain API-agnostic,
+ * so that common code can stay in one class.
  */
-MIDL_INTERFACE("7a622cf6-627a-46b2-b52f-360ef3da831c")
-IDXGIVkDevice : public IDXGIDevice2 {
+MIDL_INTERFACE("104001a6-7f36-4957-b932-86ade9567d91")
+IDXGIVkSwapChain : public IUnknown {
   static const GUID guid;
+
+  virtual HRESULT STDMETHODCALLTYPE GetDesc(
+          DXGI_SWAP_CHAIN_DESC1*    pDesc) = 0;
   
-  virtual ~IDXGIVkDevice() { }
+  virtual HRESULT STDMETHODCALLTYPE GetAdapter(
+          REFIID                    riid,
+          void**                    ppvObject) = 0;
   
-  virtual dxvk::Rc<dxvk::DxvkDevice> STDMETHODCALLTYPE GetDXVKDevice() = 0;
+  virtual HRESULT STDMETHODCALLTYPE GetDevice(
+          REFIID                    riid,
+          void**                    ppDevice) = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE GetImage(
+          UINT                      BufferId,
+          REFIID                    riid,
+          void**                    ppBuffer) = 0;
+
+  virtual UINT STDMETHODCALLTYPE GetImageIndex() = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE ChangeProperties(
+    const DXGI_SWAP_CHAIN_DESC1*    pDesc) = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE SetPresentRegion(
+    const RECT*                     pRegion) = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE SetGammaControl(
+          UINT                      NumControlPoints,
+    const DXGI_RGB*                 pControlPoints) = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE Present(
+          UINT                      SyncInterval,
+          UINT                      PresentFlags,
+    const DXGI_PRESENT_PARAMETERS*  pPresentParameters) = 0;
 };
 
 
@@ -40,109 +70,11 @@ IDXGIVkDevice : public IDXGIDevice2 {
  * this interface.
  */
 MIDL_INTERFACE("907bf281-ea3c-43b4-a8e4-9f231107b4ff")
-IDXGIVkAdapter : public IDXGIAdapter2 {
+IDXGIVkAdapter : public IDXGIAdapter3 {
   static const GUID guid;
   
   virtual dxvk::Rc<dxvk::DxvkAdapter> STDMETHODCALLTYPE GetDXVKAdapter() = 0;
   
-  /**
-   * \brief Creates a DXGI device object
-   * 
-   * \param [in] pAdapter The adapter
-   * \param [in] pFeatures Device features to enable
-   * \param [out] ppDevice The DXGI device object
-   * \returns \c S_OK on success, or an error code
-   */
-  virtual HRESULT STDMETHODCALLTYPE CreateDevice(
-          IDXGIObject*              pContainer,
-    const dxvk::DxvkDeviceFeatures* pFeatures,
-          IDXGIVkDevice**           ppDevice) = 0;
-  
-  /**
-   * \brief Maps a DXGI format to a compatible Vulkan format
-   * 
-   * For color formats, the returned Vulkan format has the
-   * same memory layout as the DXGI format so that it can
-   * be mapped and copied to buffers. For depth-stencil
-   * formats, this is not guaranteed.
-   * \param [in] format The DXGI format
-   * \param [in] mode Format lookup mode
-   * \returns Vulkan format mapping
-   */
-  virtual dxvk::DXGI_VK_FORMAT_INFO STDMETHODCALLTYPE LookupFormat(
-          DXGI_FORMAT               Format,
-          dxvk::DXGI_VK_FORMAT_MODE Mode) = 0;
-  
-  /**
-   * \brief Queries the compatibility family of a given format
-   * 
-   * \param [in] Format The DXGI format
-   * \param [in] Mode Format lookup mode
-   * \returns Format family
-   */
-  virtual dxvk::DXGI_VK_FORMAT_FAMILY STDMETHODCALLTYPE LookupFormatFamily(
-          DXGI_FORMAT               Format,
-          dxvk::DXGI_VK_FORMAT_MODE Mode) = 0;
-};
-
-
-/**
- * \brief Swap chain back buffer interface
- * 
- * Allows the swap chain and presenter to query
- * the underlying image while it is embedded in
- * a texture object specified by the client API.
- */
-MIDL_INTERFACE("5679becd-8547-4d93-96a1-e61a1ce7ef37")
-IDXGIVkBackBuffer : public IUnknown {
-  static const GUID guid;
-  
-  virtual dxvk::Rc<dxvk::DxvkImage> GetDXVKImage() = 0;
-};
-
-
-/**
- * \brief Private presentation device interface
- * 
- * Allows a swap chain to communicate with the device
- * in order to flush pending commands or create the
- * back buffer interface.
- */
-MIDL_INTERFACE("79352328-16f2-4f81-9746-9c2e2ccd43cf")
-IDXGIVkPresenter : public IUnknown {
-  static const GUID guid;
-  
-  /**
-   * \brief Creates a swap chain back buffer
-   * 
-   * \param [in] pSwapChainDesc Swap chain description
-   * \param [out] ppBackBuffer The swap chain back buffer
-   * \returns \c S_OK on success
-   */
-  virtual HRESULT STDMETHODCALLTYPE CreateSwapChainBackBuffer(
-    const DXGI_SWAP_CHAIN_DESC1*      pSwapChainDesc,
-          IDXGIVkBackBuffer**         ppBackBuffer) = 0;
-  
-  /**
-   * \brief Flushes the immediate context
-   * 
-   * Used by the swap chain's \c Present method to
-   * ensure that all rendering commands get dispatched
-   * before presenting the swap chain's back buffer.
-   * \returns \c S_OK on success
-   */
-  virtual HRESULT STDMETHODCALLTYPE FlushRenderingCommands() = 0;
-  
-  /**
-   * \brief Underlying DXVK device
-   * 
-   * \param [in] riid Device type
-   * \param [in] ppDevice device
-   * \returns DXVK device handle
-   */
-  virtual HRESULT STDMETHODCALLTYPE GetDevice(
-          REFGUID     riid,
-          void**      ppDevice) = 0;
 };
 
 
@@ -287,18 +219,36 @@ IDXGIVkInteropDevice : public IUnknown {
 };
 
 
+/**
+ * \brief IWineDXGISwapChainFactory device interface
+ *
+ * Allows a swap chain to be created from a device.
+ * See include/wine/winedxgi.idl for definition.
+ */
+MIDL_INTERFACE("53cb4ff0-c25a-4164-a891-0e83db0a7aac")
+IWineDXGISwapChainFactory : public IUnknown {
+    static const GUID guid;
+
+    virtual HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(
+            IDXGIFactory*           pFactory,
+            HWND                    hWnd,
+      const DXGI_SWAP_CHAIN_DESC1*  pDesc,
+      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
+            IDXGIOutput*            pRestrictToOutput,
+            IDXGISwapChain1**       ppSwapChain) = 0;
+};
+
+
 #ifdef _MSC_VER
 struct __declspec(uuid("907bf281-ea3c-43b4-a8e4-9f231107b4ff")) IDXGIVkAdapter;
-struct __declspec(uuid("7a622cf6-627a-46b2-b52f-360ef3da831c")) IDXGIVkDevice;
-struct __declspec(uuid("5679becd-8547-4d93-96a1-e61a1ce7ef37")) IDXGIVkBackBuffer;
-struct __declspec(uuid("79352328-16f2-4f81-9746-9c2e2ccd43cf")) IDXGIVkPresenter;
 struct __declspec(uuid("e2ef5fa5-dc21-4af7-90c4-f67ef6a09323")) IDXGIVkInteropDevice;
 struct __declspec(uuid("5546cf8c-77e7-4341-b05d-8d4d5000e77d")) IDXGIVkInteropSurface;
+struct __declspec(uuid("104001a6-7f36-4957-b932-86ade9567d91")) IDXGIVkSwapChain;
+struct __declspec(uuid("53cb4ff0-c25a-4164-a891-0e83db0a7aac")) IWineDXGISwapChainFactory;
 #else
 DXVK_DEFINE_GUID(IDXGIVkAdapter);
-DXVK_DEFINE_GUID(IDXGIVkDevice);
-DXVK_DEFINE_GUID(IDXGIVkBackBuffer);
-DXVK_DEFINE_GUID(IDXGIVkPresenter);
 DXVK_DEFINE_GUID(IDXGIVkInteropDevice);
 DXVK_DEFINE_GUID(IDXGIVkInteropSurface);
+DXVK_DEFINE_GUID(IDXGIVkSwapChain);
+DXVK_DEFINE_GUID(IWineDXGISwapChainFactory);
 #endif

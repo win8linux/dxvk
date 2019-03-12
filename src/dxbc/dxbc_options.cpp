@@ -1,33 +1,45 @@
-#include <unordered_map>
+#include "../d3d11/d3d11_options.h"
 
 #include "dxbc_options.h"
 
 namespace dxvk {
   
-  const static std::unordered_map<std::string, DxbcOptions> g_dxbcAppOptions = {{
-    
-  }};
-  
-  
-  DxbcOptions getDxbcAppOptions(const std::string& appName) {
-    auto appOptions = g_dxbcAppOptions.find(appName);
-    
-    return appOptions != g_dxbcAppOptions.end()
-      ? appOptions->second
-      : DxbcOptions();
+  DxbcOptions::DxbcOptions() {
+
   }
-  
-  
-  DxbcOptions getDxbcDeviceOptions(const Rc<DxvkDevice>& device) {
-    DxbcOptions flags;
-    
+
+
+  DxbcOptions::DxbcOptions(const Rc<DxvkDevice>& device, const D3D11Options& options) {
+    const Rc<DxvkAdapter> adapter = device->adapter();
+
     const DxvkDeviceFeatures& devFeatures = device->features();
+    const DxvkDeviceInfo& devInfo = adapter->devicePropertiesExt();
     
-    if (devFeatures.core.features.shaderStorageImageReadWithoutFormat)
-      flags.set(DxbcOption::UseStorageImageReadWithoutFormat);
+    useDepthClipWorkaround
+      = !devFeatures.extDepthClipEnable.depthClipEnable;
+    useStorageImageReadWithoutFormat
+      = devFeatures.core.features.shaderStorageImageReadWithoutFormat;
+    useSubgroupOpsForEarlyDiscard
+      = (devInfo.coreSubgroup.subgroupSize >= 4)
+     && (devInfo.coreSubgroup.supportedStages     & VK_SHADER_STAGE_FRAGMENT_BIT)
+     && (devInfo.coreSubgroup.supportedOperations & VK_SUBGROUP_FEATURE_BALLOT_BIT);
+    useRawSsbo
+      = (devInfo.core.properties.limits.minStorageBufferOffsetAlignment <= sizeof(uint32_t));
+    useSdivForBufferIndex
+      = adapter->matchesDriver(DxvkGpuVendor::Nvidia, VK_DRIVER_ID_NVIDIA_PROPRIETARY_KHR, 0, 0);
     
-    flags.set(DxbcOption::DeferKill);
-    return flags;
+    strictDivision          = options.strictDivision;
+    zeroInitWorkgroupMemory = options.zeroInitWorkgroupMemory;
+    
+    // Disable early discard on RADV due to GPU hangs
+    // Disable early discard on Nvidia because it may hurt performance
+    if (adapter->matchesDriver(DxvkGpuVendor::Amd,    VK_DRIVER_ID_MESA_RADV_KHR,          0, 0)
+     || adapter->matchesDriver(DxvkGpuVendor::Nvidia, VK_DRIVER_ID_NVIDIA_PROPRIETARY_KHR, 0, 0))
+      useSubgroupOpsForEarlyDiscard = false;
+    
+    // Apply shader-related options
+    applyTristate(useSubgroupOpsForEarlyDiscard, device->config().useEarlyDiscard);
+    applyTristate(useRawSsbo,                    device->config().useRawSsbo);
   }
   
 }

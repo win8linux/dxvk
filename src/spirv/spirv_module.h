@@ -189,6 +189,10 @@ namespace dxvk {
             uint32_t                object,
             uint32_t                set);
     
+    void decorateIndex(
+            uint32_t                object,
+            uint32_t                index);
+    
     void decorateLocation(
             uint32_t                object,
             uint32_t                location);
@@ -196,6 +200,13 @@ namespace dxvk {
     void decorateSpecId(
             uint32_t                object,
             uint32_t                specId);
+    
+    void decorateXfb(
+            uint32_t                object,
+            uint32_t                streamId,
+            uint32_t                bufferId,
+            uint32_t                offset,
+            uint32_t                stride);
     
     void memberDecorateBuiltIn(
             uint32_t                structId,
@@ -296,6 +307,11 @@ namespace dxvk {
             uint32_t                composite,
             uint32_t                indexCount,
       const uint32_t*               indexArray);
+    
+    uint32_t opArrayLength(
+            uint32_t                resultType,
+            uint32_t                structure,
+            uint32_t                memberId);
     
     uint32_t opAny(
             uint32_t                resultType,
@@ -980,6 +996,24 @@ namespace dxvk {
             uint32_t                coordinates,
             uint32_t                reference,
       const SpirvImageOperands&     operands);
+
+    uint32_t opGroupNonUniformBallot(
+            uint32_t                resultType,
+            uint32_t                execution,
+            uint32_t                predicate);
+    
+    uint32_t opGroupNonUniformBallotBitCount(
+            uint32_t                resultType,
+            uint32_t                execution,
+            uint32_t                operation,
+            uint32_t                ballot);
+    
+    uint32_t opGroupNonUniformLogicalAnd(
+            uint32_t                resultType,
+            uint32_t                execution,
+            uint32_t                operation,
+            uint32_t                value,
+            uint32_t                clusterSize);
     
     void opControlBarrier(
             uint32_t                execution,
@@ -1022,9 +1056,11 @@ namespace dxvk {
     
     void opKill();
     
-    void opEmitVertex();
+    void opEmitVertex(
+            uint32_t                streamId);
     
-    void opEndPrimitive();
+    void opEndPrimitive(
+            uint32_t                streamId);
     
   private:
     

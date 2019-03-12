@@ -26,7 +26,7 @@ namespace dxvk::hud {
   
   
   void HudRenderer::beginFrame(const Rc<DxvkContext>& context) {
-    auto vertexSlice = m_vertexBuffer->allocPhysicalSlice();
+    auto vertexSlice = m_vertexBuffer->allocSlice();
     context->invalidateBuffer(m_vertexBuffer, vertexSlice);
     
     const std::array<DxvkVertexAttribute, 3> ilAttributes = {{
@@ -279,7 +279,7 @@ namespace dxvk::hud {
     info.addressModeW   = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     info.compareToDepth = VK_FALSE;
     info.compareOp      = VK_COMPARE_OP_NEVER;
-    info.borderColor    = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+    info.borderColor    = VkClearColorValue();
     info.usePixelCoord  = VK_TRUE;
     
     return device->createSampler(info);
@@ -323,7 +323,8 @@ namespace dxvk::hud {
     
     device->submitCommandList(
       context->endRecording(),
-      nullptr, nullptr);
+      VK_NULL_HANDLE,
+      VK_NULL_HANDLE);
   }
   
   

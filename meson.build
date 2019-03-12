@@ -1,4 +1,4 @@
-project('dxvk', ['c', 'cpp'], version : 'v0.71')
+project('dxvk', ['c', 'cpp'], version : 'v1.0', meson_version : '>= 0.43')
 
 cpu_family = target_machine.cpu_family()
 
@@ -25,12 +25,20 @@ else
   dxvk_library_path = meson.source_root() + '/lib32'
 endif
 
-if meson.get_cross_property('winelib', false)
+code = '''#ifndef __WINE__
+#error 1
+#endif'''
+
+dxvk_winelib = dxvk_compiler.compiles(code, name: 'winelib check')
+dxvk_extradep = [ ]
+
+if dxvk_winelib
   lib_vulkan  = declare_dependency(link_args: [ '-lwinevulkan' ])
   lib_d3d11   = declare_dependency(link_args: [ '-ld3d11' ])
   lib_dxgi    = declare_dependency(link_args: [ '-ldxgi' ])
   lib_d3dcompiler_43 = declare_dependency(link_args: [ '-L'+dxvk_library_path, '-ld3dcompiler_43' ])
   lib_d3dcompiler_47 = declare_dependency(link_args: [ '-ld3dcompiler' ])
+  dxvk_extradep += [ declare_dependency(link_args: [ '-ldl' ]) ]
   exe_ext = '.exe.so'
   dll_ext = '.dll'
   def_spec_ext = '.spec'
@@ -56,7 +64,7 @@ glsl_generator = generator(glsl_compiler,
   arguments : [ '-V', '--vn', '@BASENAME@', '@INPUT@', '-o', '@OUTPUT@' ])
 
 dxvk_version = vcs_tag(
-  command: ['git', 'describe'],
+  command: ['git', 'describe', '--dirty=+'],
   input:  'version.h.in',
   output: 'version.h')
 
@@ -66,8 +74,4 @@ enable_tests = get_option('enable_tests')
 
 if enable_tests
   subdir('tests')
-endif
-
-if dxvk_compiler.get_id() != 'msvc'
-  subdir('utils')
 endif

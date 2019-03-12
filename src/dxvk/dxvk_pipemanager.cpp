@@ -1,5 +1,6 @@
 #include "dxvk_device.h"
 #include "dxvk_pipemanager.h"
+#include "dxvk_state_cache.h"
 
 namespace dxvk {
   
@@ -38,12 +39,15 @@ namespace dxvk {
   }
   
   
-  DxvkPipelineManager::DxvkPipelineManager(const DxvkDevice* device)
-  : m_device  (device),
-    m_cache   (new DxvkPipelineCache(device->vkd())),
-    m_compiler(nullptr) {
-    if (m_device->config().useAsyncPipeCompiler)
-      m_compiler = new DxvkPipelineCompiler();
+  DxvkPipelineManager::DxvkPipelineManager(
+    const DxvkDevice*         device,
+          DxvkRenderPassPool* passManager)
+  : m_device    (device),
+    m_cache     (new DxvkPipelineCache(device->vkd())) {
+    std::string useStateCache = env::getEnvVar("DXVK_STATE_CACHE");
+    
+    if (useStateCache != "0" && device->config().enableStateCache)
+      m_stateCache = new DxvkStateCache(device, this, passManager);
   }
   
   
@@ -67,7 +71,7 @@ namespace dxvk {
       return pair->second;
     
     const Rc<DxvkComputePipeline> pipeline
-      = new DxvkComputePipeline(m_device, m_cache, cs);
+      = new DxvkComputePipeline(this, cs);
     
     m_computePipelines.insert(std::make_pair(key, pipeline));
     return pipeline;
@@ -97,10 +101,25 @@ namespace dxvk {
       return pair->second;
     
     Rc<DxvkGraphicsPipeline> pipeline = new DxvkGraphicsPipeline(
-      m_device, m_cache, m_compiler, vs, tcs, tes, gs, fs);
+      this, vs, tcs, tes, gs, fs);
     
     m_graphicsPipelines.insert(std::make_pair(key, pipeline));
     return pipeline;
+  }
+
+  
+  void DxvkPipelineManager::registerShader(
+    const Rc<DxvkShader>&         shader) {
+    if (m_stateCache != nullptr)
+      m_stateCache->registerShader(shader);
+  }
+
+
+  DxvkPipelineCount DxvkPipelineManager::getPipelineCount() const {
+    DxvkPipelineCount result;
+    result.numComputePipelines  = m_numComputePipelines.load();
+    result.numGraphicsPipelines = m_numGraphicsPipelines.load();
+    return result;
   }
   
 }

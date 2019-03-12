@@ -5,12 +5,14 @@
 #include "dxvk_include.h"
 #include "dxvk_limits.h"
 #include "dxvk_pipelayout.h"
+#include "dxvk_shader_key.h"
 
 #include "../spirv/spirv_code_buffer.h"
 
 namespace dxvk {
   
   class DxvkShader;
+  class DxvkShaderModule;
   
   /**
    * \brief Built-in specialization constants
@@ -45,6 +47,20 @@ namespace dxvk {
   struct DxvkInterfaceSlots {
     uint32_t inputSlots  = 0;
     uint32_t outputSlots = 0;
+  };
+
+
+  /**
+   * \brief Additional shader options
+   * 
+   * Contains additional properties that should be
+   * taken into account when creating pipelines.
+   */
+  struct DxvkShaderOptions {
+    /// Rasterized stream, or -1
+    int32_t rasterizedStream;
+    /// Xfb vertex strides
+    uint32_t xfbStrides[MaxNumXfbBuffers];
   };
 
 
@@ -85,8 +101,164 @@ namespace dxvk {
     uint32_t* m_data = nullptr;
 
   };
+
+
+  /**
+   * \brief Shader module create info
+   */
+  struct DxvkShaderModuleCreateInfo {
+    bool fsDualSrcBlend;
+  };
   
   
+  /**
+   * \brief Shader object
+   * 
+   * Stores a SPIR-V shader and information on the
+   * bindings that the shader uses. In order to use
+   * the shader with a pipeline, a shader module
+   * needs to be created from he shader object.
+   */
+  class DxvkShader : public RcObject {
+    
+  public:
+    
+    DxvkShader(
+            VkShaderStageFlagBits   stage,
+            uint32_t                slotCount,
+      const DxvkResourceSlot*       slotInfos,
+      const DxvkInterfaceSlots&     iface,
+      const SpirvCodeBuffer&        code,
+      const DxvkShaderOptions&      options,
+            DxvkShaderConstData&&   constData);
+    
+    ~DxvkShader();
+    
+    /**
+     * \brief Shader stage
+     * \returns Shader stage
+     */
+    VkShaderStageFlagBits stage() const {
+      return m_stage;
+    }
+    
+    /**
+     * \brief Checks whether a capability is enabled
+     * 
+     * If the shader contains an \c OpCapability
+     * instruction with the given capability, it
+     * is considered enabled. This may be required
+     * to correctly set up certain pipeline states.
+     * \param [in] cap The capability to check
+     * \returns \c true if \c cap is enabled
+     */
+    bool hasCapability(spv::Capability cap);
+    
+    /**
+     * \brief Adds resource slots definitions to a mapping
+     * 
+     * Used to generate the exact descriptor set layout when
+     * compiling a graphics or compute pipeline. Slot indices
+     * have to be mapped to actual binding numbers.
+     */
+    void defineResourceSlots(
+            DxvkDescriptorSlotMapping& mapping) const;
+    
+    /**
+     * \brief Creates a shader module
+     * 
+     * Maps the binding slot numbers 
+     * \param [in] vkd Vulkan device functions
+     * \param [in] mapping Resource slot mapping
+     * \param [in] info Module create info
+     * \returns The shader module
+     */
+    Rc<DxvkShaderModule> createShaderModule(
+      const Rc<vk::DeviceFn>&          vkd,
+      const DxvkDescriptorSlotMapping& mapping,
+      const DxvkShaderModuleCreateInfo& info);
+    
+    /**
+     * \brief Inter-stage interface slots
+     * 
+     * Retrieves the input and output
+     * registers used by the shader.
+     * \returns Shader interface slots
+     */
+    DxvkInterfaceSlots interfaceSlots() const {
+      return m_interface;
+    }
+
+    /**
+     * \brief Shader options
+     * \returns Shader options
+     */
+    DxvkShaderOptions shaderOptions() const {
+      return m_options;
+    }
+
+    /**
+     * \brief Shader constant data
+     * 
+     * Returns a read-only reference to the 
+     * constant data associated with this
+     * shader object.
+     * \returns Shader constant data
+     */
+    const DxvkShaderConstData& shaderConstants() const {
+      return m_constData;
+    }
+    
+    /**
+     * \brief Dumps SPIR-V shader
+     * 
+     * Can be used to store the SPIR-V code in a file.
+     * \param [in] outputStream Stream to write to 
+     */
+    void dump(std::ostream& outputStream) const;
+    
+    /**
+     * \brief Sets the shader key
+     * \param [in] key Unique key
+     */
+    void setShaderKey(const DxvkShaderKey& key) {
+      m_key = key;
+    }
+
+    /**
+     * \brief Retrieves shader key
+     * \returns The unique shader key
+     */
+    DxvkShaderKey getShaderKey() const {
+      return m_key;
+    }
+    
+    /**
+     * \brief Retrieves debug name
+     * \returns The shader's name
+     */
+    std::string debugName() const {
+      return m_key.toString();
+    }
+    
+  private:
+    
+    VkShaderStageFlagBits m_stage;
+    SpirvCodeBuffer       m_code;
+    
+    std::vector<DxvkResourceSlot> m_slots;
+    std::vector<size_t>           m_idOffsets;
+    DxvkInterfaceSlots            m_interface;
+    DxvkShaderOptions             m_options;
+    DxvkShaderConstData           m_constData;
+    DxvkShaderKey                 m_key;
+
+    size_t m_o1IdxOffset = 0;
+    size_t m_o1LocOffset = 0;
+    
+  };
+  
+
   /**
    * \brief Shader module object
    * 
@@ -130,140 +302,20 @@ namespace dxvk {
     Rc<DxvkShader> shader() const {
       return m_shader;
     }
+
+    /**
+     * \brief Retrieves shader key
+     * \returns Unique shader key
+     */
+    DxvkShaderKey getShaderKey() const {
+      return m_shader->getShaderKey();
+    }
     
   private:
     
     Rc<vk::DeviceFn>      m_vkd;
     Rc<DxvkShader>        m_shader;
     VkShaderModule        m_module;
-    
-  };
-  
-  
-  /**
-   * \brief Shader object
-   * 
-   * Stores a SPIR-V shader and information on the
-   * bindings that the shader uses. In order to use
-   * the shader with a pipeline, a shader module
-   * needs to be created from he shader object.
-   */
-  class DxvkShader : public RcObject {
-    
-  public:
-    
-    DxvkShader(
-            VkShaderStageFlagBits   stage,
-            uint32_t                slotCount,
-      const DxvkResourceSlot*       slotInfos,
-      const DxvkInterfaceSlots&     iface,
-      const SpirvCodeBuffer&        code,
-            DxvkShaderConstData&&   constData);
-    
-    ~DxvkShader();
-    
-    /**
-     * \brief Shader stage
-     * \returns Shader stage
-     */
-    VkShaderStageFlagBits stage() const {
-      return m_stage;
-    }
-    
-    /**
-     * \brief Checks whether a capability is enabled
-     * 
-     * If the shader contains an \c OpCapability
-     * instruction with the given capability, it
-     * is considered enabled. This may be required
-     * to correctly set up certain pipeline states.
-     * \param [in] cap The capability to check
-     * \returns \c true if \c cap is enabled
-     */
-    bool hasCapability(spv::Capability cap);
-    
-    /**
-     * \brief Adds resource slots definitions to a mapping
-     * 
-     * Used to generate the exact descriptor set layout when
-     * compiling a graphics or compute pipeline. Slot indices
-     * have to be mapped to actual binding numbers.
-     */
-    void defineResourceSlots(
-            DxvkDescriptorSlotMapping& mapping) const;
-    
-    /**
-     * \brief Creates a shader module
-     * 
-     * Maps the binding slot numbers 
-     * \param [in] vkd Vulkan device functions
-     * \param [in] mapping Resource slot mapping
-     * \returns The shader module
-     */
-    Rc<DxvkShaderModule> createShaderModule(
-      const Rc<vk::DeviceFn>&          vkd,
-      const DxvkDescriptorSlotMapping& mapping);
-    
-    /**
-     * \brief Inter-stage interface slots
-     * 
-     * Retrieves the input and output
-     * registers used by the shader.
-     * \returns Shader interface slots
-     */
-    DxvkInterfaceSlots interfaceSlots() const {
-      return m_interface;
-    }
-
-    /**
-     * \brief Shader constant data
-     * 
-     * Returns a read-only reference to the 
-     * constant data associated with this
-     * shader object.
-     * \returns Shader constant data
-     */
-    const DxvkShaderConstData& shaderConstants() const {
-      return m_constData;
-    }
-    
-    /**
-     * \brief Dumps SPIR-V shader
-     * 
-     * Can be used to store the SPIR-V code in a file.
-     * \param [in] outputStream Stream to write to 
-     */
-    void dump(std::ostream& outputStream) const;
-    
-    /**
-     * \brief Sets the shader's debug name
-     * 
-     * Debug names may be used by the backend in
-     * order to help debug shader compiler issues.
-     * \param [in] name The shader's name
-     */
-    void setDebugName(const std::string& name) {
-      m_debugName = name;
-    }
-    
-    /**
-     * \brief Retrieves debug name
-     * \returns The shader's name
-     */
-    std::string debugName() const {
-      return m_debugName;
-    }
-    
-  private:
-    
-    VkShaderStageFlagBits m_stage;
-    SpirvCodeBuffer       m_code;
-    
-    std::vector<DxvkResourceSlot> m_slots;
-    std::vector<size_t>           m_idOffsets;
-    DxvkInterfaceSlots            m_interface;
-    DxvkShaderConstData           m_constData;
-    std::string                   m_debugName;
     
   };
   

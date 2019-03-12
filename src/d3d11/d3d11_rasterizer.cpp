@@ -41,18 +41,19 @@ namespace dxvk {
       ? VK_FRONT_FACE_COUNTER_CLOCKWISE
       : VK_FRONT_FACE_CLOCKWISE;
     
-    // Let's treat the depth bias as enabled by default
-    m_state.depthBiasEnable   = VK_TRUE;
-    m_state.depthBiasConstant = static_cast<float>(desc.DepthBias);
-    m_state.depthBiasClamp    = desc.DepthBiasClamp;
-    m_state.depthBiasSlope    = desc.SlopeScaledDepthBias;
-    m_state.depthClampEnable  = desc.DepthClipEnable ? VK_FALSE : VK_TRUE;
+    // In the backend we treat depth bias as a dynamic state because
+    // some games like to put random/uninitialized numbers here, but
+    // we do not need to enable it in case the parameters are both 0.
+    m_state.depthBiasEnable   = desc.DepthBias != 0 || desc.SlopeScaledDepthBias != 0.0f;
+    m_state.depthClipEnable   = desc.DepthClipEnable;
+    m_state.sampleCount       = VkSampleCountFlags(desc.ForcedSampleCount);
+
+    m_depthBias.depthBiasConstant = float(desc.DepthBias);
+    m_depthBias.depthBiasSlope    = desc.SlopeScaledDepthBias;
+    m_depthBias.depthBiasClamp    = desc.DepthBiasClamp;
     
     if (desc.AntialiasedLineEnable)
       Logger::err("D3D11RasterizerState: Antialiased lines not supported");
-    
-    if (desc.ForcedSampleCount)
-      Logger::err("D3D11RasterizerState: Forced sample count not supported");
   }
   
   
@@ -62,6 +63,9 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE D3D11RasterizerState::QueryInterface(REFIID riid, void** ppvObject) {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+
     *ppvObject = nullptr;
     
     if (riid == __uuidof(IUnknown)
@@ -110,6 +114,9 @@ namespace dxvk {
   
   void D3D11RasterizerState::BindToContext(const Rc<DxvkContext>& ctx) {
     ctx->setRasterizerState(m_state);
+    
+    if (m_state.depthBiasEnable)
+      ctx->setDepthBias(m_depthBias);
   }
   
   

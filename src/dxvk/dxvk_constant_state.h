@@ -16,6 +16,40 @@ namespace dxvk {
    */
   struct DxvkBlendConstants {
     float r, g, b, a;
+
+    bool operator == (const DxvkBlendConstants& other) const {
+      return this->r == other.r && this->g == other.g
+          && this->b == other.b && this->a == other.a;
+    }
+
+    bool operator != (const DxvkBlendConstants& other) const {
+      return this->r != other.r || this->g != other.g
+          || this->b != other.b || this->a != other.a;
+    }
+  };
+
+
+  /**
+   * \brief Depth bias
+   * 
+   * Stores depth bias values.
+   */
+  struct DxvkDepthBias {
+    float               depthBiasConstant;
+    float               depthBiasSlope;
+    float               depthBiasClamp;
+
+    bool operator == (const DxvkDepthBias& other) const {
+      return depthBiasConstant == other.depthBiasConstant
+          && depthBiasSlope    == other.depthBiasSlope
+          && depthBiasClamp    == other.depthBiasClamp;
+    }
+
+    bool operator != (const DxvkDepthBias& other) const {
+      return depthBiasConstant != other.depthBiasConstant
+          || depthBiasSlope    != other.depthBiasSlope
+          || depthBiasClamp    != other.depthBiasClamp;
+    }
   };
   
   
@@ -43,11 +77,9 @@ namespace dxvk {
     VkPolygonMode       polygonMode;
     VkCullModeFlags     cullMode;
     VkFrontFace         frontFace;
-    VkBool32            depthClampEnable;
+    VkBool32            depthClipEnable;
     VkBool32            depthBiasEnable;
-    float               depthBiasConstant;
-    float               depthBiasClamp;
-    float               depthBiasSlope;
+    VkSampleCountFlags  sampleCount;
   };
   
   

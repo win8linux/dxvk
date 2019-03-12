@@ -79,11 +79,17 @@ namespace dxvk {
     }
     
     /**
-     * \brief Sample count
+     * \brief Framebuffer sample count
+     * 
+     * Returns the sample count of the color
+     * and depth-stencil attachments, or 0 if
+     * there are no attachments.
      * \returns Sample count
      */
-    VkSampleCountFlagBits getSampleCount() const {
-      return m_renderPass->getSampleCount();
+    VkSampleCountFlags getSampleCount() const {
+      return m_attachmentCount != 0
+        ? m_renderPass->getSampleCount()
+        : 0;
     }
     
     /**
@@ -170,8 +176,19 @@ namespace dxvk {
      * \returns \c true if the render targets are the same
      *          as the ones used for this framebuffer object.
      */
-    bool hasTargets(
-      const DxvkRenderTargets&  renderTargets);
+    bool hasTargets(const DxvkRenderTargets& renderTargets);
+    
+    /**
+     * \brief Checks whether view and framebuffer sizes match
+     *
+     * Tests whether the size of the framebuffer is the same
+     * as the size of one of its views. This may be \c false
+     * when mixing attachments with mismatched dimensions.
+     * \param [in] view Image view to test
+     * \returns \c true if \c view has the same size as
+     *          the framebuffer.
+     */
+    bool isFullSize(const Rc<DxvkImageView>& view) const;
     
     /**
      * \brief Generatess render pass format

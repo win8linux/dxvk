@@ -8,8 +8,6 @@
 
 namespace dxvk {
 
-  using DxvkQueryTypeFlags = Flags<VkQueryType>;
-
   /**
    * \brief Query manager
    *
@@ -71,7 +69,7 @@ namespace dxvk {
      */
     void beginQueries(
       const Rc<DxvkCommandList>&  cmd,
-            DxvkQueryTypeFlags    types);
+            VkQueryType           type);
     
     /**
      * \brief Ends active queries
@@ -82,7 +80,7 @@ namespace dxvk {
      */
     void endQueries(
       const Rc<DxvkCommandList>&  cmd,
-            DxvkQueryTypeFlags    types);
+            VkQueryType           type);
     
     /**
      * \brief Tracks query pools
@@ -98,11 +96,12 @@ namespace dxvk {
 
     const Rc<vk::DeviceFn> m_vkd;
 
-    DxvkQueryTypeFlags m_activeTypes;
+    uint32_t m_activeTypes = 0;
 
     Rc<DxvkQueryPool> m_occlusion;
     Rc<DxvkQueryPool> m_pipeStats;
     Rc<DxvkQueryPool> m_timestamp;
+    Rc<DxvkQueryPool> m_xfbStream;
 
     std::vector<DxvkQueryRevision> m_activeQueries;
 
@@ -110,7 +109,18 @@ namespace dxvk {
       const Rc<DxvkCommandList>&  cmd,
       const Rc<DxvkQueryPool>&    pool);
     
+    void beginVulkanQuery(
+      const Rc<DxvkCommandList>&  cmd,
+      const DxvkQueryRevision&    query);
+    
+    void endVulkanQuery(
+      const Rc<DxvkCommandList>&  cmd,
+      const DxvkQueryRevision&    query);
+    
     Rc<DxvkQueryPool>& getQueryPool(
+            VkQueryType           type);
+    
+    static uint32_t getDxvkQueryTypeBit(
             VkQueryType           type);
     
   };

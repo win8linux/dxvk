@@ -53,9 +53,10 @@ namespace dxvk {
     
     bool isTypeless = formatInfo.Aspect == 0;
     bool isMutable = formatFamily.FormatCount > 1;
+    bool isColorFormat = (formatProperties->aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) != 0;
 
-    if (isMutable && (formatProperties->aspectMask & VK_IMAGE_ASPECT_COLOR_BIT)) {
-      imageInfo.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+    if (isMutable && isColorFormat) {
+      imageInfo.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
 
       // Typeless UAV images have relaxed reinterpretation rules
       if (!isTypeless || !(m_desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS)) {
@@ -100,7 +101,7 @@ namespace dxvk {
     }
     
     // Access pattern for meta-resolve operations
-    if (imageInfo.sampleCount != VK_SAMPLE_COUNT_1_BIT) {
+    if (imageInfo.sampleCount != VK_SAMPLE_COUNT_1_BIT && isColorFormat) {
       imageInfo.usage  |= VK_IMAGE_USAGE_SAMPLED_BIT;
       imageInfo.stages |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
       imageInfo.access |= VK_ACCESS_SHADER_READ_BIT;
@@ -109,7 +110,8 @@ namespace dxvk {
     if (m_desc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE)
       imageInfo.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     
-    if (Dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D)
+    if (Dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D &&
+        (m_desc.BindFlags & D3D11_BIND_RENDER_TARGET))
       imageInfo.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT_KHR;
     
     // Some image formats (i.e. the R32G32B32 ones) are
@@ -139,19 +141,26 @@ namespace dxvk {
     // it is going to be used by the game.
     if (imageInfo.tiling == VK_IMAGE_TILING_OPTIMAL)
       imageInfo.layout = OptimizeLayout(imageInfo.usage);
+
+    // For some formats, we need to enable sampled and/or
+    // render target capabilities if available, but these
+    // should in no way affect the default image layout
+    imageInfo.usage |= EnableMetaCopyUsage(imageInfo.format, imageInfo.tiling);
+    imageInfo.usage |= EnableMetaPackUsage(imageInfo.format, m_desc.CPUAccessFlags);
     
     // Check if we can actually create the image
     if (!CheckImageSupport(&imageInfo, imageInfo.tiling)) {
       throw DxvkError(str::format(
         "D3D11: Cannot create texture:",
-        "\n  Format:  ", imageInfo.format,
-        "\n  Extent:  ", imageInfo.extent.width,
-                    "x", imageInfo.extent.height,
-                    "x", imageInfo.extent.depth,
-        "\n  Samples: ", imageInfo.sampleCount,
-        "\n  Layers:  ", imageInfo.numLayers,
-        "\n  Levels:  ", imageInfo.mipLevels,
-        "\n  Usage:   ", std::hex, imageInfo.usage));
+        "\n  Format:  ", m_desc.Format,
+        "\n  Extent:  ", m_desc.Width,
+                    "x", m_desc.Height,
+                    "x", m_desc.Depth,
+        "\n  Samples: ", m_desc.SampleDesc.Count,
+        "\n  Layers:  ", m_desc.ArraySize,
+        "\n  Levels:  ", m_desc.MipLevels,
+        "\n  Usage:   ", std::hex, m_desc.BindFlags,
+        "\n  Flags:   ", std::hex, m_desc.MiscFlags));
     }
     
     // If necessary, create the mapped linear buffer
@@ -256,6 +265,9 @@ namespace dxvk {
   
   
   HRESULT D3D11CommonTexture::NormalizeTextureProperties(D3D11_COMMON_TEXTURE_DESC* pDesc) {
+    if (pDesc->Width == 0 || pDesc->Height == 0 || pDesc->Depth == 0)
+      return E_INVALIDARG;
+    
     if (FAILED(DecodeSampleCount(pDesc->SampleDesc.Count, nullptr)))
       return E_INVALIDARG;
     
@@ -305,6 +317,63 @@ namespace dxvk {
   }
   
   
+  VkImageUsageFlags D3D11CommonTexture::EnableMetaCopyUsage(
+          VkFormat              Format,
+          VkImageTiling         Tiling) const {
+    VkFormatFeatureFlags requestedFeatures = 0;
+
+    if (Format == VK_FORMAT_D16_UNORM || Format == VK_FORMAT_D32_SFLOAT) {
+      requestedFeatures |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
+                        |  VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    }
+
+    if (Format == VK_FORMAT_R16_UNORM || Format == VK_FORMAT_R32_SFLOAT) {
+      requestedFeatures |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
+                        |  VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+    }
+
+    if (requestedFeatures == 0)
+      return 0;
+
+    // Enable usage flags for all supported and requested features
+    VkFormatProperties properties = m_device->GetDXVKDevice()->adapter()->formatProperties(Format);
+
+    requestedFeatures &= Tiling == VK_IMAGE_TILING_OPTIMAL
+      ? properties.optimalTilingFeatures
+      : properties.linearTilingFeatures;
+    
+    VkImageUsageFlags requestedUsage = 0;
+
+    if (requestedFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)
+      requestedUsage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    
+    if (requestedFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+      requestedUsage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    
+    if (requestedFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)
+      requestedUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+    return requestedUsage;
+  }
+
+
+  VkImageUsageFlags D3D11CommonTexture::EnableMetaPackUsage(
+          VkFormat              Format,
+          UINT                  CpuAccess) const {
+    if ((CpuAccess & D3D11_CPU_ACCESS_READ) == 0)
+      return 0;
+    
+    const auto dsMask = VK_IMAGE_ASPECT_DEPTH_BIT
+                      | VK_IMAGE_ASPECT_STENCIL_BIT;
+
+    auto formatInfo = imageFormatInfo(Format);
+
+    return formatInfo->aspectMask == dsMask
+      ? VK_IMAGE_USAGE_SAMPLED_BIT
+      : 0;
+  }
+
+  
   D3D11_COMMON_TEXTURE_MAP_MODE D3D11CommonTexture::DetermineMapMode(
     const DxvkImageCreateInfo*  pImageInfo) const {
     // Don't map an image unless the application requests it
@@ -318,6 +387,11 @@ namespace dxvk {
     //    writing the image to device-local image may be more efficient than
     //    reading its contents from host-visible memory.
     if (m_desc.Usage == D3D11_USAGE_DYNAMIC)
+      return D3D11_COMMON_TEXTURE_MAP_MODE_BUFFER;
+    
+    // Depth-stencil formats in D3D11 can be mapped and follow special
+    // packing rules, so we need to copy that data into a buffer first
+    if (GetPackedDepthStencilFormat(m_desc.Format))
       return D3D11_COMMON_TEXTURE_MAP_MODE_BUFFER;
     
     // Images that can be read by the host should be mapped directly in
@@ -483,7 +557,7 @@ namespace dxvk {
     const D3D11_COMMON_TEXTURE_DESC*  pDesc)
   : m_texture (pDevice, pDesc, D3D11_RESOURCE_DIMENSION_TEXTURE1D),
     m_interop (this, &m_texture),
-    m_d3d10   (this) {
+    m_d3d10   (this, pDevice->GetD3D10Interface()) {
     
   }
   
@@ -494,6 +568,9 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE D3D11Texture1D::QueryInterface(REFIID riid, void** ppvObject) {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+
     *ppvObject = nullptr;
     
     if (riid == __uuidof(IUnknown)
@@ -533,13 +610,15 @@ namespace dxvk {
   
   
   UINT STDMETHODCALLTYPE D3D11Texture1D::GetEvictionPriority() {
-    Logger::warn("D3D11Texture1D::GetEvictionPriority: Stub");
     return DXGI_RESOURCE_PRIORITY_NORMAL;
   }
   
   
   void STDMETHODCALLTYPE D3D11Texture1D::SetEvictionPriority(UINT EvictionPriority) {
-    Logger::warn("D3D11Texture1D::SetEvictionPriority: Stub");
+    static bool s_errorShown = false;
+
+    if (!std::exchange(s_errorShown, true))
+      Logger::warn("D3D11Texture1D::SetEvictionPriority: Stub");
   }
   
   
@@ -562,7 +641,7 @@ namespace dxvk {
     const D3D11_COMMON_TEXTURE_DESC*  pDesc)
   : m_texture (pDevice, pDesc, D3D11_RESOURCE_DIMENSION_TEXTURE2D),
     m_interop (this, &m_texture),
-    m_d3d10   (this) {
+    m_d3d10   (this, pDevice->GetD3D10Interface()) {
     
   }
   
@@ -573,6 +652,9 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE D3D11Texture2D::QueryInterface(REFIID riid, void** ppvObject) {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+
     *ppvObject = nullptr;
     
     if (riid == __uuidof(IUnknown)
@@ -612,13 +694,15 @@ namespace dxvk {
   
   
   UINT STDMETHODCALLTYPE D3D11Texture2D::GetEvictionPriority() {
-    Logger::warn("D3D11Texture2D::GetEvictionPriority: Stub");
     return DXGI_RESOURCE_PRIORITY_NORMAL;
   }
   
   
   void STDMETHODCALLTYPE D3D11Texture2D::SetEvictionPriority(UINT EvictionPriority) {
-    Logger::warn("D3D11Texture2D::SetEvictionPriority: Stub");
+    static bool s_errorShown = false;
+
+    if (!std::exchange(s_errorShown, true))
+      Logger::warn("D3D11Texture2D::SetEvictionPriority: Stub");
   }
   
   
@@ -643,7 +727,7 @@ namespace dxvk {
     const D3D11_COMMON_TEXTURE_DESC*  pDesc)
   : m_texture (pDevice, pDesc, D3D11_RESOURCE_DIMENSION_TEXTURE3D),
     m_interop (this, &m_texture),
-    m_d3d10   (this) {
+    m_d3d10   (this, pDevice->GetD3D10Interface()) {
     
   }
   
@@ -654,6 +738,9 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE D3D11Texture3D::QueryInterface(REFIID riid, void** ppvObject) {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+
     *ppvObject = nullptr;
     
     if (riid == __uuidof(IUnknown)
@@ -693,13 +780,15 @@ namespace dxvk {
   
   
   UINT STDMETHODCALLTYPE D3D11Texture3D::GetEvictionPriority() {
-    Logger::warn("D3D11Texture3D::GetEvictionPriority: Stub");
     return DXGI_RESOURCE_PRIORITY_NORMAL;
   }
   
   
   void STDMETHODCALLTYPE D3D11Texture3D::SetEvictionPriority(UINT EvictionPriority) {
-    Logger::warn("D3D11Texture3D::SetEvictionPriority: Stub");
+    static bool s_errorShown = false;
+
+    if (!std::exchange(s_errorShown, true))
+      Logger::warn("D3D11Texture3D::SetEvictionPriority: Stub");
   }
   
   

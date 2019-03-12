@@ -6,6 +6,18 @@
 namespace dxvk {
 
   /**
+   * \brief Tri-state
+   * 
+   * Used to conditionally override
+   * booleans if desired.
+   */
+  enum class Tristate : int32_t {
+    Auto  = -1,
+    False =  0,
+    True  =  1,
+  };
+
+  /**
    * \brief Config option set
    * 
    * Stores configuration options
@@ -66,6 +78,14 @@ namespace dxvk {
     }
 
     /**
+     * \brief Logs option values
+     * 
+     * Prints the effective configuration
+     * to the log for debugging purposes. 
+     */
+    void logOptions() const;
+
+    /**
      * \brief Retrieves default options for an app
      * 
      * \param [in] appName Name of the application
@@ -100,7 +120,26 @@ namespace dxvk {
     static bool parseOptionValue(
       const std::string&  value,
             int32_t&      result);
+    
+    static bool parseOptionValue(
+      const std::string&  value,
+            Tristate&     result);
 
   };
+
+
+  /**
+   * \brief Applies tristate option
+   * 
+   * Overrides the given value if \c state is
+   * \c True or \c False, and leaves it intact
+   * otherwise.
+   * \param [out] option The value to override
+   * \param [in] state Tristate to apply
+   */
+  inline void applyTristate(bool& option, Tristate state) {
+    option &= state != Tristate::False;
+    option |= state == Tristate::True;
+  }
 
 }

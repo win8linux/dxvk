@@ -3,9 +3,10 @@
 
 namespace dxvk {
   
-  DxgiFactory::DxgiFactory()
+  DxgiFactory::DxgiFactory(UINT Flags)
   : m_instance(new DxvkInstance()),
-    m_options (m_instance->config()) {
+    m_options (m_instance->config()),
+    m_flags   (Flags) {
     for (uint32_t i = 0; m_instance->enumAdapters(i) != nullptr; i++)
       m_instance->enumAdapters(i)->logAdapterInfo();
   }
@@ -17,13 +18,18 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE DxgiFactory::QueryInterface(REFIID riid, void** ppvObject) {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+
     *ppvObject = nullptr;
     
     if (riid == __uuidof(IUnknown)
      || riid == __uuidof(IDXGIObject)
      || riid == __uuidof(IDXGIFactory)
      || riid == __uuidof(IDXGIFactory1)
-     || riid == __uuidof(IDXGIFactory2)) {
+     || riid == __uuidof(IDXGIFactory2)
+     || riid == __uuidof(IDXGIFactory3)
+     || riid == __uuidof(IDXGIFactory4)) {
       *ppvObject = ref(this);
       return S_OK;
     }
@@ -107,30 +113,21 @@ namespace dxvk {
           IDXGISwapChain1**     ppSwapChain) {
     InitReturnPtr(ppSwapChain);
     
-    if (ppSwapChain == nullptr || pDesc == nullptr || hWnd == nullptr || pDevice == nullptr)
+    if (!ppSwapChain || !pDesc || !hWnd || !pDevice)
       return DXGI_ERROR_INVALID_CALL;
     
-    // If necessary, set up a default set of
-    // fullscreen parameters for the swap chain
-    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc;
+    Com<IWineDXGISwapChainFactory> wineDevice;
     
-    if (pFullscreenDesc != nullptr) {
-      fullscreenDesc = *pFullscreenDesc;
-    } else {
-      fullscreenDesc.RefreshRate      = { 0, 0 };
-      fullscreenDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
-      fullscreenDesc.Scaling          = DXGI_MODE_SCALING_UNSPECIFIED;
-      fullscreenDesc.Windowed         = TRUE;
+    if (SUCCEEDED(pDevice->QueryInterface(
+          __uuidof(IWineDXGISwapChainFactory),
+          reinterpret_cast<void**>(&wineDevice)))) {
+      return wineDevice->CreateSwapChainForHwnd(
+        this, hWnd, pDesc, pFullscreenDesc,
+        pRestrictToOutput, ppSwapChain);
     }
     
-    try {
-      *ppSwapChain = ref(new DxgiSwapChain(this,
-        pDevice, hWnd, pDesc, &fullscreenDesc));
-      return S_OK;
-    } catch (const DxvkError& e) {
-      Logger::err(e.message());
-      return E_FAIL;
-    }
+    Logger::err("DXGI: CreateSwapChainForHwnd: Unsupported device type");
+    return DXGI_ERROR_UNSUPPORTED;
   }
   
   
@@ -193,6 +190,42 @@ namespace dxvk {
   }
   
   
+  HRESULT STDMETHODCALLTYPE DxgiFactory::EnumAdapterByLuid(
+          LUID                  AdapterLuid,
+          REFIID                riid,
+          void**                ppvAdapter) {
+    InitReturnPtr(ppvAdapter);
+    uint32_t adapterId = 0;
+
+    while (true) {
+      Com<IDXGIAdapter> adapter;
+      HRESULT hr = EnumAdapters(adapterId++, &adapter);
+
+      if (FAILED(hr))
+        return hr;
+      
+      DXGI_ADAPTER_DESC desc;
+      adapter->GetDesc(&desc);
+
+      if (!std::memcmp(&AdapterLuid, &desc.AdapterLuid, sizeof(LUID)))
+        return adapter->QueryInterface(riid, ppvAdapter);
+    }
+
+    // This should be unreachable
+    return DXGI_ERROR_NOT_FOUND;
+  }
+
+  
+  HRESULT STDMETHODCALLTYPE DxgiFactory::EnumWarpAdapter(
+          REFIID                riid,
+          void**                ppvAdapter) {
+    InitReturnPtr(ppvAdapter);
+
+    Logger::err("DxgiFactory::EnumWarpAdapter: Not implemented");
+    return E_NOTIMPL;
+  }
+
+
   HRESULT STDMETHODCALLTYPE DxgiFactory::GetWindowAssociation(HWND *pWindowHandle) {
     if (pWindowHandle == nullptr)
       return DXGI_ERROR_INVALID_CALL;
@@ -218,7 +251,6 @@ namespace dxvk {
   
   
   BOOL STDMETHODCALLTYPE DxgiFactory::IsCurrent() {
-    Logger::warn("DxgiFactory::IsCurrent: Stub");
     return TRUE;
   }
   
@@ -266,6 +298,11 @@ namespace dxvk {
   void STDMETHODCALLTYPE DxgiFactory::UnregisterOcclusionStatus(
           DWORD                 dwCookie) {
     Logger::err("DxgiFactory::UnregisterOcclusionStatus: Not implemented");
+  }
+
+
+  UINT STDMETHODCALLTYPE DxgiFactory::GetCreationFlags() {
+    return m_flags;
   }
   
 }

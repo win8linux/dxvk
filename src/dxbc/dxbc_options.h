@@ -3,34 +3,37 @@
 #include "../dxvk/dxvk_device.h"
 
 namespace dxvk {
+
+  struct D3D11Options;
   
-  enum class DxbcOption : uint64_t {
+  struct DxbcOptions {
+    DxbcOptions();
+    DxbcOptions(const Rc<DxvkDevice>& device, const D3D11Options& options);
+
+    // Clamp oDepth in fragment shaders if the depth
+    // clip device feature is not supported
+    bool useDepthClipWorkaround = false;
+
     /// Use the ShaderImageReadWithoutFormat capability.
-    /// Enabled by default on GPUs which support this.
-    UseStorageImageReadWithoutFormat,
+    bool useStorageImageReadWithoutFormat = false;
+
+    /// Use subgroup operations to discard fragment
+    /// shader invocations if derivatives remain valid.
+    bool useSubgroupOpsForEarlyDiscard = false;
+
+    /// Use SSBOs instead of texel buffers
+    /// for raw and structured buffers.
+    bool useRawSsbo = false;
     
-    /// Defer kill operation to the end of the shader.
-    /// Fixes derivatives that are undefined due to
-    /// non-uniform control flow in fragment shaders.
-    DeferKill,
+    /// Use SDiv instead of SHR to converte byte offsets to
+    /// dword offsets. Fixes RE2 and DMC5 on Nvidia drivers.
+    bool useSdivForBufferIndex = false;
+
+    /// Enables sm4-compliant division-by-zero behaviour
+    bool strictDivision = false;
+
+    /// Clear thread-group shared memory to zero
+    bool zeroInitWorkgroupMemory = false;
   };
-  
-  using DxbcOptions = Flags<DxbcOption>;
-  
-  /**
-   * \brief Gets app-specific DXBC options
-   * 
-   * \param [in] appName Application name
-   * \returns DXBC options for this application
-   */
-  DxbcOptions getDxbcAppOptions(const std::string& appName);
-  
-  /**
-   * \brief Gets device-specific options
-   * 
-   * \param [in] device The device
-   * \returns Device options
-   */
-  DxbcOptions getDxbcDeviceOptions(const Rc<DxvkDevice>& device);
   
 }

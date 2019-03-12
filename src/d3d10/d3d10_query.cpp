@@ -1,4 +1,5 @@
 #include "d3d10_query.h"
+#include "d3d10_device.h"
 
 #include "../d3d11/d3d11_device.h"
 #include "../d3d11/d3d11_context.h"

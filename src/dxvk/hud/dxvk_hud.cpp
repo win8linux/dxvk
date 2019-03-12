@@ -16,14 +16,12 @@ namespace dxvk::hud {
     m_hudFramerate  (config.elements),
     m_hudStats      (config.elements) {
     // Set up constant state
-    m_rsState.polygonMode        = VK_POLYGON_MODE_FILL;
-    m_rsState.cullMode           = VK_CULL_MODE_BACK_BIT;
-    m_rsState.frontFace          = VK_FRONT_FACE_CLOCKWISE;
-    m_rsState.depthClampEnable   = VK_FALSE;
-    m_rsState.depthBiasEnable    = VK_FALSE;
-    m_rsState.depthBiasConstant  = 0.0f;
-    m_rsState.depthBiasClamp     = 0.0f;
-    m_rsState.depthBiasSlope     = 0.0f;
+    m_rsState.polygonMode       = VK_POLYGON_MODE_FILL;
+    m_rsState.cullMode          = VK_CULL_MODE_BACK_BIT;
+    m_rsState.frontFace         = VK_FRONT_FACE_CLOCKWISE;
+    m_rsState.depthClipEnable   = VK_FALSE;
+    m_rsState.depthBiasEnable   = VK_FALSE;
+    m_rsState.sampleCount       = VK_SAMPLE_COUNT_1_BIT;
 
     m_blendMode.enableBlending  = VK_TRUE;
     m_blendMode.colorSrcFactor  = VK_BLEND_FACTOR_ONE;
@@ -62,7 +60,7 @@ namespace dxvk::hud {
   
   
   Rc<Hud> Hud::createHud(const Rc<DxvkDevice>& device) {
-    HudConfig config(env::getEnvVar(L"DXVK_HUD"));
+    HudConfig config(env::getEnvVar("DXVK_HUD"));
     
     return !config.elements.isClear()
       ? new Hud(device, config)
@@ -92,6 +90,14 @@ namespace dxvk::hud {
       position.y += 24.0f;
     }
 
+    if (m_config.elements.test(HudElement::DxvkClientApi)) {
+      m_renderer.drawText(ctx, 16.0f,
+        { position.x, position.y },
+        { 1.0f, 1.0f, 1.0f, 1.0f },
+        m_device->clientApi());
+      position.y += 24.0f;
+    }
+
     if (m_config.elements.test(HudElement::DeviceInfo)) {
       position = m_hudDeviceInfo.render(
         ctx, m_renderer, position);
@@ -103,8 +109,8 @@ namespace dxvk::hud {
   
   
   void Hud::updateUniformBuffer(const Rc<DxvkContext>& ctx, const HudUniformData& data) {
-    auto slice = m_uniformBuffer->allocPhysicalSlice();
-    std::memcpy(slice.mapPtr(0), &data, sizeof(data));
+    auto slice = m_uniformBuffer->allocSlice();
+    std::memcpy(slice.mapPtr, &data, sizeof(data));
 
     ctx->invalidateBuffer(m_uniformBuffer, slice);
   }

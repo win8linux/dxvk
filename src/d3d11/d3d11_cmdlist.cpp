@@ -16,6 +16,9 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE D3D11CommandList::QueryInterface(REFIID riid, void** ppvObject) {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+
     *ppvObject = nullptr;
     
     if (riid == __uuidof(IUnknown)
@@ -65,10 +68,11 @@ namespace dxvk {
   
   
   void D3D11CommandList::MarkSubmitted() {
-    if (m_submitted.exchange(true) && !m_warned.exchange(true)) {
+    if (m_submitted.exchange(true) && !m_warned.exchange(true)
+     && m_device->GetOptions()->dcSingleUseMode) {
       Logger::warn(
-        "D3D11: Command list submitted multiple times.\n"
-        "       This is currently not supported.");
+        "D3D11: Command list submitted multiple times,\n"
+        "       but d3d11.dcSingleUseMode is enabled");
     }
   }
   

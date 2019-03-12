@@ -23,11 +23,14 @@ namespace dxvk {
       if ((tag == "SHDR") || (tag == "SHEX"))
         m_shexChunk = new DxbcShex(chunkReader);
       
-      if ((tag == "ISGN"))
+      if ((tag == "ISGN") || (tag == "ISG1"))
         m_isgnChunk = new DxbcIsgn(chunkReader, tag);
       
-      if ((tag == "OSGN") || (tag == "OSG5"))
+      if ((tag == "OSGN") || (tag == "OSG5") || (tag == "OSG1"))
         m_osgnChunk = new DxbcIsgn(chunkReader, tag);
+      
+      if ((tag == "PCSG") || (tag == "PSG1"))
+        m_psgnChunk = new DxbcIsgn(chunkReader, tag);
     }
   }
   
@@ -46,17 +49,17 @@ namespace dxvk {
     DxbcAnalysisInfo analysisInfo;
     
     DxbcAnalyzer analyzer(moduleInfo,
-      m_shexChunk->version(),
+      m_shexChunk->programInfo(),
       m_isgnChunk, m_osgnChunk,
-      analysisInfo);
+      m_psgnChunk, analysisInfo);
     
     this->runAnalyzer(analyzer, m_shexChunk->slice());
     
     DxbcCompiler compiler(
       fileName, moduleInfo,
-      m_shexChunk->version(),
+      m_shexChunk->programInfo(),
       m_isgnChunk, m_osgnChunk,
-      analysisInfo);
+      m_psgnChunk, analysisInfo);
     
     this->runCompiler(compiler, m_shexChunk->slice());
     
@@ -64,6 +67,25 @@ namespace dxvk {
   }
   
   
+  Rc<DxvkShader> DxbcModule::compilePassthroughShader(
+    const DxbcModuleInfo& moduleInfo,
+    const std::string&    fileName) const {
+    if (m_shexChunk == nullptr)
+      throw DxvkError("DxbcModule::compile: No SHDR/SHEX chunk");
+    
+    DxbcAnalysisInfo analysisInfo;
+
+    DxbcCompiler compiler(
+      fileName, moduleInfo,
+      DxbcProgramType::GeometryShader,
+      m_osgnChunk, m_osgnChunk,
+      m_psgnChunk, analysisInfo);
+    
+    compiler.processXfbPassthrough();
+    return compiler.finalize();
+  }
+
+
   void DxbcModule::runAnalyzer(
           DxbcAnalyzer&       analyzer,
           DxbcCodeSlice       slice) const {

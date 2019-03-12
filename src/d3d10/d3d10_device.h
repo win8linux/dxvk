@@ -1,9 +1,9 @@
 #pragma once
 
-#include "d3d10_include.h"
+#include "d3d10_multithread.h"
 
 namespace dxvk {
-  
+
   class D3D11Device;
   class D3D11ImmediateContext;
 
@@ -469,7 +469,7 @@ namespace dxvk {
     void STDMETHODCALLTYPE GetTextFilterSize(
             UINT*                             pWidth,
             UINT*                             pHeight);
-    
+
   private:
 
     D3D11Device*            m_device;

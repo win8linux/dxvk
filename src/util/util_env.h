@@ -13,7 +13,7 @@ namespace dxvk::env {
    * \param [in] name Name of the variable
    * \returns Value of the variable
    */
-  std::string getEnvVar(const wchar_t* name);
+  std::string getEnvVar(const char* name);
   
   /**
    * \brief Gets the executable name
@@ -29,6 +29,14 @@ namespace dxvk::env {
    * \brief Sets name of the calling thread
    * \param [in] name Thread name
    */
-  void setThreadName(const wchar_t* name);
+  void setThreadName(const std::string& name);
+
+  /**
+   * \brief Creates a directory
+   * 
+   * \param [in] path Path to directory
+   * \returns \c true on success
+   */
+  bool createDirectory(const std::string& path);
   
 }

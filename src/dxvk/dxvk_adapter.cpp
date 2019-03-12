@@ -3,20 +3,22 @@
 #include "dxvk_adapter.h"
 #include "dxvk_device.h"
 #include "dxvk_instance.h"
-#include "dxvk_surface.h"
 
 namespace dxvk {
   
   DxvkAdapter::DxvkAdapter(
-    const Rc<DxvkInstance>&   instance,
+          DxvkInstance*       instance,
           VkPhysicalDevice    handle)
   : m_instance      (instance),
     m_vki           (instance->vki()),
     m_handle        (handle) {
+    this->initHeapAllocInfo();
     this->queryExtensions();
     this->queryDeviceInfo();
     this->queryDeviceFeatures();
     this->queryDeviceQueues();
+
+    m_hasMemoryBudget = m_deviceExtensions.supports(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
   }
   
   
@@ -30,6 +32,36 @@ namespace dxvk {
   }
   
   
+  DxvkAdapterMemoryInfo DxvkAdapter::getMemoryHeapInfo() const {
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT memBudget = { };
+    memBudget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    memBudget.pNext = nullptr;
+
+    VkPhysicalDeviceMemoryProperties2KHR memProps = { };
+    memProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2_KHR;
+    memProps.pNext = m_hasMemoryBudget ? &memBudget : nullptr;
+
+    m_vki->vkGetPhysicalDeviceMemoryProperties2KHR(m_handle, &memProps);
+    
+    DxvkAdapterMemoryInfo info = { };
+    info.heapCount = memProps.memoryProperties.memoryHeapCount;
+
+    for (uint32_t i = 0; i < info.heapCount; i++) {
+      info.heaps[i].heapFlags = memProps.memoryProperties.memoryHeaps[i].flags;
+
+      if (m_hasMemoryBudget) {
+        info.heaps[i].memoryAvailable = memBudget.heapBudget[i];
+        info.heaps[i].memoryAllocated = memBudget.heapUsage[i];
+      } else {
+        info.heaps[i].memoryAvailable = memProps.memoryProperties.memoryHeaps[i].size;
+        info.heaps[i].memoryAllocated = m_heapAlloc[i].load();
+      }
+    }
+
+    return info;
+  }
+
+
   VkPhysicalDeviceMemoryProperties DxvkAdapter::memoryProperties() const {
     VkPhysicalDeviceMemoryProperties memoryProperties;
     m_vki->vkGetPhysicalDeviceMemoryProperties(m_handle, &memoryProperties);
@@ -182,18 +214,38 @@ namespace dxvk {
         && (m_deviceFeatures.core.features.variableMultisampleRate
                 || !required.core.features.variableMultisampleRate)
         && (m_deviceFeatures.core.features.inheritedQueries
-                || !required.core.features.inheritedQueries);
+                || !required.core.features.inheritedQueries)
+        && (m_deviceFeatures.extDepthClipEnable.depthClipEnable
+                || !required.extDepthClipEnable.depthClipEnable)
+        && (m_deviceFeatures.extMemoryPriority.memoryPriority
+                || !required.extMemoryPriority.memoryPriority)
+        && (m_deviceFeatures.extTransformFeedback.transformFeedback
+                || !required.extTransformFeedback.transformFeedback)
+        && (m_deviceFeatures.extVertexAttributeDivisor.vertexAttributeInstanceRateDivisor
+                || !required.extVertexAttributeDivisor.vertexAttributeInstanceRateDivisor)
+        && (m_deviceFeatures.extVertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor
+                || !required.extVertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor);
   }
   
   
-  Rc<DxvkDevice> DxvkAdapter::createDevice(DxvkDeviceFeatures enabledFeatures) {
+  void DxvkAdapter::enableExtensions(const DxvkNameSet& extensions) {
+    m_extraExtensions.merge(extensions);
+  }
+
+
+  Rc<DxvkDevice> DxvkAdapter::createDevice(std::string clientApi, DxvkDeviceFeatures enabledFeatures) {
     DxvkDeviceExtensions devExtensions;
 
-    std::array<DxvkExt*, 11> devExtensionList = {{
+    std::array<DxvkExt*, 16> devExtensionList = {{
+      &devExtensions.amdMemoryOverallocationBehaviour,
+      &devExtensions.extDepthClipEnable,
+      &devExtensions.extMemoryPriority,
       &devExtensions.extShaderViewportIndexLayer,
+      &devExtensions.extTransformFeedback,
       &devExtensions.extVertexAttributeDivisor,
       &devExtensions.khrDedicatedAllocation,
       &devExtensions.khrDescriptorUpdateTemplate,
+      &devExtensions.khrDriverProperties,
       &devExtensions.khrGetMemoryRequirements2,
       &devExtensions.khrImageFormatList,
       &devExtensions.khrMaintenance1,
@@ -212,12 +264,47 @@ namespace dxvk {
       throw DxvkError("DxvkAdapter: Failed to create device");
     
     // Enable additional extensions if necessary
-    extensionsEnabled.merge(g_vrInstance.getDeviceExtensions(getAdapterIndex()));
+    extensionsEnabled.merge(m_extraExtensions);
     DxvkNameList extensionNameList = extensionsEnabled.toNameList();
     
     Logger::info("Enabled device extensions:");
     this->logNameList(extensionNameList);
+
+    // Create pNext chain for additional device features
+    enabledFeatures.core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR;
+    enabledFeatures.core.pNext = nullptr;
+
+    if (devExtensions.extDepthClipEnable) {
+      enabledFeatures.extDepthClipEnable.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT;
+      enabledFeatures.extDepthClipEnable.pNext = enabledFeatures.core.pNext;
+      enabledFeatures.core.pNext = &enabledFeatures.extDepthClipEnable;
+    }
+
+    if (devExtensions.extMemoryPriority) {
+      enabledFeatures.extMemoryPriority.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT;
+      enabledFeatures.extMemoryPriority.pNext = enabledFeatures.core.pNext;
+      enabledFeatures.core.pNext = &enabledFeatures.extMemoryPriority;
+    }
+
+    if (devExtensions.extTransformFeedback) {
+      enabledFeatures.extTransformFeedback.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT;
+      enabledFeatures.extTransformFeedback.pNext = enabledFeatures.core.pNext;
+      enabledFeatures.core.pNext = &enabledFeatures.extTransformFeedback;
+    }
+
+    if (devExtensions.extVertexAttributeDivisor.revision() >= 3) {
+      enabledFeatures.extVertexAttributeDivisor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
+      enabledFeatures.extVertexAttributeDivisor.pNext = enabledFeatures.core.pNext;
+      enabledFeatures.core.pNext = &enabledFeatures.extVertexAttributeDivisor;
+    }
+
+    // Report the desired overallocation behaviour to the driver
+    VkDeviceMemoryOverallocationCreateInfoAMD overallocInfo;
+    overallocInfo.sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_OVERALLOCATION_CREATE_INFO_AMD;
+    overallocInfo.pNext = nullptr;
+    overallocInfo.overallocationBehavior = VK_MEMORY_OVERALLOCATION_BEHAVIOR_ALLOWED_AMD;
     
+    // Create one single queue for graphics and present
     float queuePriority = 1.0f;
     std::vector<VkDeviceQueueCreateInfo> queueInfos;
     
@@ -241,7 +328,7 @@ namespace dxvk {
 
     VkDeviceCreateInfo info;
     info.sType                      = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    info.pNext                      = nullptr;
+    info.pNext                      = enabledFeatures.core.pNext;
     info.flags                      = 0;
     info.queueCreateInfoCount       = queueInfos.size();
     info.pQueueCreateInfos          = queueInfos.data();
@@ -250,22 +337,52 @@ namespace dxvk {
     info.enabledExtensionCount      = extensionNameList.count();
     info.ppEnabledExtensionNames    = extensionNameList.names();
     info.pEnabledFeatures           = &enabledFeatures.core.features;
+
+    if (devExtensions.amdMemoryOverallocationBehaviour)
+      overallocInfo.pNext = std::exchange(info.pNext, &overallocInfo);
     
     VkDevice device = VK_NULL_HANDLE;
     
     if (m_vki->vkCreateDevice(m_handle, &info, nullptr, &device) != VK_SUCCESS)
       throw DxvkError("DxvkAdapter: Failed to create device");
     
-    Rc<DxvkDevice> result = new DxvkDevice(this,
-      new vk::DeviceFn(m_vki->instance(), device),
+    Rc<DxvkDevice> result = new DxvkDevice(clientApi, this,
+      new vk::DeviceFn(true, m_vki->instance(), device),
       devExtensions, enabledFeatures);
     result->initResources();
     return result;
   }
   
   
-  Rc<DxvkSurface> DxvkAdapter::createSurface(HINSTANCE instance, HWND window) {
-    return new DxvkSurface(this, instance, window);
+  void DxvkAdapter::notifyHeapMemoryAlloc(
+          uint32_t            heap,
+          VkDeviceSize        bytes) {
+    if (!m_hasMemoryBudget)
+      m_heapAlloc[heap] += bytes;
+  }
+
+  
+  void DxvkAdapter::notifyHeapMemoryFree(
+          uint32_t            heap,
+          VkDeviceSize        bytes) {
+    if (!m_hasMemoryBudget)
+      m_heapAlloc[heap] -= bytes;
+  }
+
+
+  bool DxvkAdapter::matchesDriver(
+          DxvkGpuVendor       vendor,
+          VkDriverIdKHR       driver,
+          uint32_t            minVer,
+          uint32_t            maxVer) const {
+    bool driverMatches = m_deviceInfo.khrDeviceDriverProperties.driverID
+      ? driver == m_deviceInfo.khrDeviceDriverProperties.driverID
+      : vendor == DxvkGpuVendor(m_deviceInfo.core.properties.vendorID);
+
+    if (minVer) driverMatches &= m_deviceInfo.core.properties.driverVersion >= minVer;
+    if (maxVer) driverMatches &= m_deviceInfo.core.properties.driverVersion <  maxVer;
+
+    return driverMatches;
   }
   
   
@@ -301,6 +418,12 @@ namespace dxvk {
   }
   
   
+  void DxvkAdapter::initHeapAllocInfo() {
+    for (uint32_t i = 0; i < m_heapAlloc.size(); i++)
+      m_heapAlloc[i] = 0;
+  }
+
+
   void DxvkAdapter::queryExtensions() {
     m_deviceExtensions = DxvkNameSet::enumDeviceExtensions(m_vki, m_handle);
   }
@@ -311,11 +434,33 @@ namespace dxvk {
     m_deviceInfo.core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR;
     m_deviceInfo.core.pNext = nullptr;
 
+    // Query info now so that we have basic device properties available
+    m_vki->vkGetPhysicalDeviceProperties2KHR(m_handle, &m_deviceInfo.core);
+
+    if (m_deviceInfo.core.properties.apiVersion >= VK_MAKE_VERSION(1, 1, 0)) {
+      m_deviceInfo.coreDeviceId.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+      m_deviceInfo.coreDeviceId.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.coreDeviceId);
+
+      m_deviceInfo.coreSubgroup.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+      m_deviceInfo.coreSubgroup.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.coreSubgroup);
+    }
+
+    if (m_deviceExtensions.supports(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME)) {
+      m_deviceInfo.extTransformFeedback.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT;
+      m_deviceInfo.extTransformFeedback.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.extTransformFeedback);
+    }
+
     if (m_deviceExtensions.supports(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME)) {
       m_deviceInfo.extVertexAttributeDivisor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_PROPERTIES_EXT;
       m_deviceInfo.extVertexAttributeDivisor.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.extVertexAttributeDivisor);
     }
 
+    if (m_deviceExtensions.supports(VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME)) {
+      m_deviceInfo.khrDeviceDriverProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES_KHR;
+      m_deviceInfo.khrDeviceDriverProperties.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.khrDeviceDriverProperties);
+    }
+
+    // Query full device properties for all enabled extensions
     m_vki->vkGetPhysicalDeviceProperties2KHR(m_handle, &m_deviceInfo.core);
     
     // Nvidia reports the driver version in a slightly different format
@@ -333,6 +478,26 @@ namespace dxvk {
     m_deviceFeatures.core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR;
     m_deviceFeatures.core.pNext = nullptr;
 
+    if (m_deviceExtensions.supports(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME)) {
+      m_deviceFeatures.extDepthClipEnable.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT;
+      m_deviceFeatures.extDepthClipEnable.pNext = std::exchange(m_deviceFeatures.core.pNext, &m_deviceFeatures.extDepthClipEnable);
+    }
+
+    if (m_deviceExtensions.supports(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME)) {
+      m_deviceFeatures.extMemoryPriority.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT;
+      m_deviceFeatures.extMemoryPriority.pNext = std::exchange(m_deviceFeatures.core.pNext, &m_deviceFeatures.extMemoryPriority);
+    }
+
+    if (m_deviceExtensions.supports(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME)) {
+      m_deviceFeatures.extTransformFeedback.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT;
+      m_deviceFeatures.extTransformFeedback.pNext = std::exchange(m_deviceFeatures.core.pNext, &m_deviceFeatures.extTransformFeedback);
+    }
+
+    if (m_deviceExtensions.supports(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME) >= 3) {
+      m_deviceFeatures.extVertexAttributeDivisor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
+      m_deviceFeatures.extVertexAttributeDivisor.pNext = std::exchange(m_deviceFeatures.core.pNext, &m_deviceFeatures.extVertexAttributeDivisor);
+    }
+
     m_vki->vkGetPhysicalDeviceFeatures2KHR(m_handle, &m_deviceFeatures.core);
   }
 
@@ -345,16 +510,6 @@ namespace dxvk {
     m_queueFamilies.resize(numQueueFamilies);
     m_vki->vkGetPhysicalDeviceQueueFamilyProperties(
       m_handle, &numQueueFamilies, m_queueFamilies.data());
-  }
-
-
-  uint32_t DxvkAdapter::getAdapterIndex() const {
-    for (uint32_t i = 0; m_instance->enumAdapters(i) != nullptr; i++) {
-      if (m_instance->enumAdapters(i).ptr() == this)
-        return i;
-    }
-
-    return ~0u;
   }
   
   

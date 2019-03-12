@@ -13,10 +13,11 @@ namespace dxvk {
    * the current status of the query. 
    */
   enum class DxvkQueryStatus : uint32_t {
-    Reset     = 0,  ///< Query is reset
-    Active    = 1,  ///< Query is being recorded
-    Pending   = 2,  ///< Query has been recorded
-    Available = 3,  ///< Query results can be retrieved
+    Created   = 0,  ///< Query was just created
+    Reset     = 1,  ///< Query is reset
+    Active    = 2,  ///< Query is being recorded
+    Pending   = 3,  ///< Query has been recorded
+    Available = 4,  ///< Query results can be retrieved
   };
   
   /**
@@ -57,6 +58,19 @@ namespace dxvk {
     uint64_t tesInvocations;
     uint64_t csInvocations;
   };
+
+  /**
+   * \brief Transform feedback stream query
+   * 
+   * Stores the number of primitives written to the
+   * buffer, as well as the number of primitives
+   * generated. The latter can be used to check for
+   * overflow.
+   */
+  struct DxvkQueryXfbStreamData {
+    uint64_t primitivesWritten;
+    uint64_t primitivesNeeded;
+  };
   
   /**
    * \brief Query data
@@ -68,6 +82,7 @@ namespace dxvk {
     DxvkQueryOcclusionData occlusion;
     DxvkQueryTimestampData timestamp;
     DxvkQueryStatisticData statistic;
+    DxvkQueryXfbStreamData xfbStream;
   };
   
   /**
@@ -80,6 +95,7 @@ namespace dxvk {
     VkQueryPool         queryPool = VK_NULL_HANDLE;
     uint32_t            queryId   = 0;
     VkQueryControlFlags flags     = 0;
+    uint32_t            index     = 0;
   };
   
   /**
@@ -90,12 +106,13 @@ namespace dxvk {
    * submissions, we need to 
    */
   class DxvkQuery : public RcObject {
-    
+
   public:
     
     DxvkQuery(
       VkQueryType         type,
-      VkQueryControlFlags flags);
+      VkQueryControlFlags flags,
+      uint32_t            index = ~0u);
     ~DxvkQuery();
     
     /**
@@ -116,6 +133,24 @@ namespace dxvk {
     VkQueryControlFlags flags() const {
       return m_flags;
     }
+
+    /**
+     * \brief Query type index
+     * 
+     * The query type index. Will be undefined if the
+     * query type is not indexed. Not to be confused
+     * with the query index within the query pool.
+     * \returns Query type index
+     */
+    uint32_t index() const {
+      return m_index;
+    }
+
+    /**
+     * \brief Checks whether the query type is indexed
+     * \returns \c true if the query type is indexed
+     */
+    bool isIndexed() const;
     
     /**
      * \brief Resets the query object
@@ -187,10 +222,11 @@ namespace dxvk {
     
     const VkQueryType         m_type;
     const VkQueryControlFlags m_flags;
+    const uint32_t            m_index;
     
-    std::mutex m_mutex;
+    sync::TicketLock m_mutex;
     
-    DxvkQueryStatus m_status   = DxvkQueryStatus::Reset;
+    DxvkQueryStatus m_status   = DxvkQueryStatus::Created;
     DxvkQueryData   m_data     = {};
     DxvkQueryHandle m_handle;
     

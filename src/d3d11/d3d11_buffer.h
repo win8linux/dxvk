@@ -11,6 +11,27 @@ namespace dxvk {
   
   class D3D11Device;
   class D3D11DeviceContext;
+
+
+  /**
+   * \brief Buffer map mode
+   */
+  enum D3D11_COMMON_BUFFER_MAP_MODE {
+    D3D11_COMMON_BUFFER_MAP_MODE_NONE,
+    D3D11_COMMON_BUFFER_MAP_MODE_DIRECT,
+  };
+
+
+  /**
+   * \brief Stream output buffer offset
+   *
+   * A byte offset into the buffer that
+   * stores the byte offset where new
+   * data will be written to.
+   */
+  struct D3D11SOCounter {
+    uint32_t byteOffset;
+  };
   
   
   class D3D11Buffer : public D3D11DeviceChild<ID3D11Buffer> {
@@ -46,33 +67,44 @@ namespace dxvk {
     const D3D11_BUFFER_DESC* Desc() const {
       return &m_desc;
     }
-    
+
+    D3D11_COMMON_BUFFER_MAP_MODE GetMapMode() const {
+      return (m_buffer->memFlags() & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+        ? D3D11_COMMON_BUFFER_MAP_MODE_DIRECT
+        : D3D11_COMMON_BUFFER_MAP_MODE_NONE;
+    }
+
     Rc<DxvkBuffer> GetBuffer() const {
       return m_buffer;
     }
     
     DxvkBufferSlice GetBufferSlice() const {
-      return DxvkBufferSlice(m_buffer, 0, m_buffer->info().size);
+      return GetBufferSlice(0, m_desc.ByteWidth);
     }
     
     DxvkBufferSlice GetBufferSlice(VkDeviceSize offset) const {
-      return DxvkBufferSlice(m_buffer, offset, m_buffer->info().size - offset);
+      return GetBufferSlice(offset, m_desc.ByteWidth - offset);
     }
     
     DxvkBufferSlice GetBufferSlice(VkDeviceSize offset, VkDeviceSize length) const {
       return DxvkBufferSlice(m_buffer, offset, length);
     }
+
+    DxvkBufferSlice GetSOCounter() {
+      return m_soCounter;
+    }
     
-    VkDeviceSize GetSize() const {
-      return m_buffer->info().size;
+    DxvkBufferSliceHandle AllocSlice() {
+      return m_buffer->allocSlice();
+    }
+    
+    DxvkBufferSliceHandle DiscardSlice() {
+      m_mapped = m_buffer->allocSlice();
+      return m_mapped;
     }
 
-    DxvkPhysicalBufferSlice GetMappedSlice() const {
-      return m_mappedSlice;
-    }
-
-    void SetMappedSlice(const DxvkPhysicalBufferSlice& slice) {
-      m_mappedSlice = slice;
+    DxvkBufferSliceHandle GetMappedSlice() const {
+      return m_mapped;
     }
 
     D3D10Buffer* GetD3D10Iface() {
@@ -85,12 +117,10 @@ namespace dxvk {
     const D3D11_BUFFER_DESC     m_desc;
     
     Rc<DxvkBuffer>              m_buffer;
-    DxvkPhysicalBufferSlice     m_mappedSlice;
+    DxvkBufferSlice             m_soCounter;
+    DxvkBufferSliceHandle       m_mapped;
 
     D3D10Buffer                 m_d3d10;
-    
-    Rc<DxvkBuffer> CreateBuffer(
-      const D3D11_BUFFER_DESC*    pDesc) const;
 
     BOOL CheckFormatFeatureSupport(
             VkFormat              Format,

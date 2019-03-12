@@ -28,9 +28,6 @@ namespace dxvk {
 
   
   DxgiOptions::DxgiOptions(const Config& config) {
-    this->deferSurfaceCreation  = config.getOption<bool>    ("dxgi.deferSurfaceCreation", false);
-    this->maxFrameLatency       = config.getOption<int32_t> ("dxgi.maxFrameLatency",      0);
-    
     // Fetch these as a string representing a hexadecimal number and parse it.
     this->customVendorId = parsePciId(config.getOption<std::string>("dxgi.customVendorId"));
     this->customDeviceId = parsePciId(config.getOption<std::string>("dxgi.customDeviceId"));
@@ -39,8 +36,8 @@ namespace dxvk {
     this->maxDeviceMemory = VkDeviceSize(config.getOption<int32_t>("dxgi.maxDeviceMemory", 0)) << 20;
     this->maxSharedMemory = VkDeviceSize(config.getOption<int32_t>("dxgi.maxSharedMemory", 0)) << 20;
 
-    this->numBackBuffers = config.getOption<int32_t>("dxgi.numBackBuffers", 0);
-    this->syncInterval   = config.getOption<int32_t>("dxgi.syncInterval", -1);
+    this->d3d10Enable = config.getOption<bool>("d3d10.enable", true);
+    this->nvapiHack   = config.getOption<bool>("dxgi.nvapiHack", true);
   }
   
 }

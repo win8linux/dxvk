@@ -13,14 +13,22 @@ namespace dxvk {
 
     m_config = Config::getUserConfig();
     m_config.merge(Config::getAppConfig(env::getExeName()));
+    m_config.logOptions();
 
     g_vrInstance.initInstanceExtensions();
 
     m_vkl = new vk::LibraryFn();
-    m_vki = new vk::InstanceFn(this->createInstance());
+    m_vki = new vk::InstanceFn(true, this->createInstance());
 
     m_adapters = this->queryAdapters();
     g_vrInstance.initDeviceExtensions(this);
+
+    for (uint32_t i = 0; i < m_adapters.size(); i++) {
+      m_adapters[i]->enableExtensions(
+        g_vrInstance.getDeviceExtensions(i));
+    }
+
+    m_options = DxvkOptions(m_config);
   }
   
   
@@ -33,6 +41,31 @@ namespace dxvk {
     return index < m_adapters.size()
       ? m_adapters[index]
       : nullptr;
+  }
+
+
+  Rc<DxvkAdapter> DxvkInstance::findAdapterByLuid(const void* luid) const {
+    for (const auto& adapter : m_adapters) {
+      const auto& props = adapter->devicePropertiesExt().coreDeviceId;
+
+      if (props.deviceLUIDValid && !std::memcmp(luid, props.deviceLUID, VK_LUID_SIZE))
+        return adapter;
+    }
+
+    return nullptr;
+  }
+
+  
+  Rc<DxvkAdapter> DxvkInstance::findAdapterByDeviceId(uint16_t vendorId, uint16_t deviceId) const {
+    for (const auto& adapter : m_adapters) {
+      const auto& props = adapter->deviceProperties();
+
+      if (props.vendorID == vendorId
+       && props.deviceID == deviceId)
+        return adapter;
+    }
+
+    return nullptr;
   }
   
   
@@ -60,15 +93,17 @@ namespace dxvk {
     
     Logger::info("Enabled instance extensions:");
     this->logNameList(extensionNameList);
+
+    std::string appName = env::getExeName();
     
     VkApplicationInfo appInfo;
     appInfo.sType                 = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pNext                 = nullptr;
-    appInfo.pApplicationName      = nullptr;
+    appInfo.pApplicationName      = appName.c_str();
     appInfo.applicationVersion    = 0;
     appInfo.pEngineName           = "DXVK";
-    appInfo.engineVersion         = VK_MAKE_VERSION(0, 0, 1);
-    appInfo.apiVersion            = VK_MAKE_VERSION(1, 0, 47);
+    appInfo.engineVersion         = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.apiVersion            = VK_MAKE_VERSION(1, 1, 0);
     
     VkInstanceCreateInfo info;
     info.sType                    = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -81,8 +116,17 @@ namespace dxvk {
     info.ppEnabledExtensionNames  = extensionNameList.names();
     
     VkInstance result = VK_NULL_HANDLE;
-    if (m_vkl->vkCreateInstance(&info, nullptr, &result) != VK_SUCCESS)
+    VkResult status = m_vkl->vkCreateInstance(&info, nullptr, &result);
+
+    if (status == VK_ERROR_INCOMPATIBLE_DRIVER) {
+      Logger::warn("Failed to create Vulkan 1.1 instance, falling back to 1.0");
+      appInfo.apiVersion = 0; /* some very old drivers may not accept 1.0 */
+      status = m_vkl->vkCreateInstance(&info, nullptr, &result);
+    }
+
+    if (status != VK_SUCCESS)
       throw DxvkError("DxvkInstance::createInstance: Failed to create Vulkan instance");
+    
     return result;
   }
   

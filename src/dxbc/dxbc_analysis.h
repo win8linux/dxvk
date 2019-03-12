@@ -55,9 +55,10 @@ namespace dxvk {
     
     DxbcAnalyzer(
       const DxbcModuleInfo&     moduleInfo,
-      const DxbcProgramVersion& version,
+      const DxbcProgramInfo&    programInfo,
       const Rc<DxbcIsgn>&       isgn,
       const Rc<DxbcIsgn>&       osgn,
+      const Rc<DxbcIsgn>&       psgn,
             DxbcAnalysisInfo&   analysis);
     
     ~DxbcAnalyzer();
@@ -73,6 +74,7 @@ namespace dxvk {
     
     Rc<DxbcIsgn> m_isgn;
     Rc<DxbcIsgn> m_osgn;
+    Rc<DxbcIsgn> m_psgn;
     
     DxbcAnalysisInfo* m_analysis = nullptr;
     

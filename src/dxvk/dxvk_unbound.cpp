@@ -36,7 +36,8 @@ namespace dxvk {
     
     dev->submitCommandList(
       ctx->endRecording(),
-      nullptr, nullptr);
+      VK_NULL_HANDLE,
+      VK_NULL_HANDLE);
   }
   
   
@@ -55,7 +56,7 @@ namespace dxvk {
     info.addressModeW   = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     info.compareToDepth = VK_FALSE;
     info.compareOp      = VK_COMPARE_OP_NEVER;
-    info.borderColor    = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    info.borderColor    = VkClearColorValue();
     info.usePixelCoord  = VK_FALSE;
     
     return dev->createSampler(info);
@@ -73,12 +74,7 @@ namespace dxvk {
                     | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT
                     | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
     info.stages     = VK_PIPELINE_STAGE_TRANSFER_BIT
-                    | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
-                    | VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT
-                    | VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT
-                    | VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT
-                    | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                    | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+                    | dev->getShaderPipelineStages();
     info.access     = VK_ACCESS_UNIFORM_READ_BIT
                     | VK_ACCESS_SHADER_READ_BIT
                     | VK_ACCESS_SHADER_WRITE_BIT;
@@ -116,12 +112,7 @@ namespace dxvk {
                      | VK_IMAGE_USAGE_SAMPLED_BIT
                      | VK_IMAGE_USAGE_STORAGE_BIT;
     info.stages      = VK_PIPELINE_STAGE_TRANSFER_BIT
-                     | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
-                     | VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT
-                     | VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT
-                     | VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT
-                     | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                     | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+                     | dev->getShaderPipelineStages();
     info.access      = VK_ACCESS_SHADER_READ_BIT;
     info.layout      = VK_IMAGE_LAYOUT_GENERAL;
     info.tiling      = VK_IMAGE_TILING_OPTIMAL;

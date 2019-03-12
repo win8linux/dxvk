@@ -5,9 +5,21 @@
 
 #include "dxvk_compute.h"
 #include "dxvk_graphics.h"
-#include "dxvk_pipecompiler.h"
 
 namespace dxvk {
+
+  class DxvkStateCache;
+
+  /**
+   * \brief Pipeline count
+   * 
+   * Stores number of graphics and
+   * compute pipelines, individually.
+   */
+  struct DxvkPipelineCount {
+    uint32_t numGraphicsPipelines;
+    uint32_t numComputePipelines;
+  };
   
   /**
    * \brief Compute pipeline key
@@ -57,10 +69,14 @@ namespace dxvk {
    * pipeline objects to the client API.
    */
   class DxvkPipelineManager : public RcObject {
-    
+    friend class DxvkComputePipeline;
+    friend class DxvkGraphicsPipeline;
   public:
     
-    DxvkPipelineManager(const DxvkDevice* device);
+    DxvkPipelineManager(
+      const DxvkDevice*         device,
+            DxvkRenderPassPool* passManager);
+    
     ~DxvkPipelineManager();
     
     /**
@@ -95,11 +111,30 @@ namespace dxvk {
       const Rc<DxvkShader>&         gs,
       const Rc<DxvkShader>&         fs);
     
+    /*
+     * \brief Registers a shader
+     * 
+     * Starts compiling pipelines asynchronously
+     * in case the state cache contains state
+     * vectors for this shader.
+     * \param [in] shader Newly compiled shader
+     */
+    void registerShader(
+      const Rc<DxvkShader>&         shader);
+    
+    /**
+     * \brief Retrieves total pipeline count
+     * \returns Number of compute/graphics pipelines
+     */
+    DxvkPipelineCount getPipelineCount() const;
   private:
     
     const DxvkDevice*         m_device;
     Rc<DxvkPipelineCache>     m_cache;
-    Rc<DxvkPipelineCompiler>  m_compiler;
+    Rc<DxvkStateCache>        m_stateCache;
+
+    std::atomic<uint32_t>     m_numComputePipelines  = { 0 };
+    std::atomic<uint32_t>     m_numGraphicsPipelines = { 0 };
     
     std::mutex m_mutex;
     

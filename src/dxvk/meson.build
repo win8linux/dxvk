@@ -12,11 +12,21 @@ dxvk_shaders = files([
   'shaders/dxvk_clear_image3d_u.comp',
   'shaders/dxvk_clear_image3d_f.comp',
   
+  'shaders/dxvk_copy_color_1d.frag',
+  'shaders/dxvk_copy_color_2d.frag',
+  'shaders/dxvk_copy_color_ms.frag',
+  'shaders/dxvk_copy_depth_1d.frag',
+  'shaders/dxvk_copy_depth_2d.frag',
+  'shaders/dxvk_copy_depth_ms.frag',
+
   'shaders/dxvk_mipgen_vert.vert',
   'shaders/dxvk_mipgen_geom.geom',
   'shaders/dxvk_mipgen_frag_1d.frag',
   'shaders/dxvk_mipgen_frag_2d.frag',
   'shaders/dxvk_mipgen_frag_3d.frag',
+
+  'shaders/dxvk_pack_d24s8.comp',
+  'shaders/dxvk_pack_d32s8.comp',
   
   'shaders/dxvk_resolve_vert.vert',
   'shaders/dxvk_resolve_geom.geom',
@@ -33,7 +43,6 @@ dxvk_src = files([
   'dxvk_adapter.cpp',
   'dxvk_barrier.cpp',
   'dxvk_buffer.cpp',
-  'dxvk_buffer_res.cpp',
   'dxvk_cmdlist.cpp',
   'dxvk_compute.cpp',
   'dxvk_context.cpp',
@@ -44,7 +53,6 @@ dxvk_src = files([
   'dxvk_device_filter.cpp',
   'dxvk_extensions.cpp',
   'dxvk_event.cpp',
-  'dxvk_event_tracker.cpp',
   'dxvk_format.cpp',
   'dxvk_framebuffer.cpp',
   'dxvk_graphics.cpp',
@@ -54,12 +62,13 @@ dxvk_src = files([
   'dxvk_main.cpp',
   'dxvk_memory.cpp',
   'dxvk_meta_clear.cpp',
+  'dxvk_meta_copy.cpp',
   'dxvk_meta_mipgen.cpp',
+  'dxvk_meta_pack.cpp',
   'dxvk_meta_resolve.cpp',
   'dxvk_openvr.cpp',
   'dxvk_options.cpp',
   'dxvk_pipecache.cpp',
-  'dxvk_pipecompiler.cpp',
   'dxvk_pipelayout.cpp',
   'dxvk_pipemanager.cpp',
   'dxvk_query.cpp',
@@ -71,12 +80,11 @@ dxvk_src = files([
   'dxvk_resource.cpp',
   'dxvk_sampler.cpp',
   'dxvk_shader.cpp',
+  'dxvk_shader_key.cpp',
   'dxvk_spec_const.cpp',
   'dxvk_staging.cpp',
+  'dxvk_state_cache.cpp',
   'dxvk_stats.cpp',
-  'dxvk_surface.cpp',
-  'dxvk_swapchain.cpp',
-  'dxvk_sync.cpp',
   'dxvk_unbound.cpp',
   'dxvk_util.cpp',
   
@@ -87,19 +95,16 @@ dxvk_src = files([
   'hud/dxvk_hud_fps.cpp',
   'hud/dxvk_hud_renderer.cpp',
   'hud/dxvk_hud_stats.cpp',
-  
-  'vulkan/dxvk_vulkan_loader.cpp',
-  'vulkan/dxvk_vulkan_names.cpp',
 ])
 
 thread_dep = dependency('threads')
 
 dxvk_lib = static_library('dxvk', dxvk_src, glsl_generator.process(dxvk_shaders), dxvk_version,
   link_with           : [ util_lib, spirv_lib ],
-  dependencies        : [ thread_dep, lib_vulkan ],
+  dependencies        : [ thread_dep, vkcommon_dep ] + dxvk_extradep,
   include_directories : [ dxvk_include_path ],
   override_options    : ['cpp_std='+dxvk_cpp_std])
 
 dxvk_dep = declare_dependency(
   link_with           : [ dxvk_lib ],
-  include_directories : [ dxvk_include_path, include_directories('.') ])
+  include_directories : [ dxvk_include_path ])

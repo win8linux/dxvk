@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dxvk_descriptor.h"
 #include "dxvk_format.h"
 #include "dxvk_memory.h"
 #include "dxvk_resource.h"
@@ -240,6 +241,21 @@ namespace dxvk {
       return subresource.aspectMask == this->formatInfo()->aspectMask
           && extent == this->mipLevelExtent(subresource.mipLevel);
     }
+
+    /**
+     * \brief Checks view format compatibility
+     * 
+     * If this returns true, a view with the given
+     * format can be safely created for this image.
+     * \param [in] format The format to check
+     * \returns \c true if the format is vompatible
+     */
+    bool isViewCompatible(VkFormat format) const {
+      bool result = m_info.format == format;
+      for (uint32_t i = 0; i < m_viewFormats.size() && !result; i++)
+        result |= m_viewFormats[i] == format;
+      return result;
+    }
     
   private:
     
@@ -339,7 +355,7 @@ namespace dxvk {
      * \brief Image object
      * \returns Image object
      */
-    Rc<DxvkImage> image() const {
+    const Rc<DxvkImage>& image() const {
       return m_image;
     }
     
@@ -376,7 +392,22 @@ namespace dxvk {
     VkImageLayout pickLayout(VkImageLayout layout) const {
       return m_image->pickLayout(layout);
     }
-    
+
+    /**
+     * \brief Retrieves descriptor info
+     * 
+     * \param [in] type Exact view type
+     * \param [in] layout Image layout
+     * \returns Image descriptor
+     */
+    DxvkDescriptorInfo getDescriptor(VkImageViewType type, VkImageLayout layout) const {
+      DxvkDescriptorInfo result;
+      result.image.sampler      = VK_NULL_HANDLE;
+      result.image.imageView    = handle(type);
+      result.image.imageLayout  = layout;
+      return result;
+    }
+
   private:
     
     Rc<vk::DeviceFn>  m_vkd;
@@ -384,7 +415,7 @@ namespace dxvk {
     
     DxvkImageViewCreateInfo m_info;
     VkImageView             m_views[ViewCount];
-    
+
     void createView(VkImageViewType type, uint32_t numLayers);
     
   };

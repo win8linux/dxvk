@@ -7,7 +7,7 @@
 #include "dxgi_include.h"
 
 namespace dxvk {
-  
+
   /**
    * \brief DXGI options
    * 
@@ -16,15 +16,6 @@ namespace dxvk {
    */
   struct DxgiOptions {
     DxgiOptions(const Config& config);
-
-    /// Defer surface creation until first present call. This
-    /// fixes issues with games that create multiple swap chains
-    /// for a single window that may interfere with each other.
-    bool deferSurfaceCreation;
-
-    /// Override maximum frame latency if the app specifies
-    /// a higher value. May help with frame timing issues.
-    int32_t maxFrameLatency;
 
     /// Override PCI vendor and device IDs reported to the
     /// application. This may make apps think they are running
@@ -38,13 +29,11 @@ namespace dxvk {
     VkDeviceSize maxDeviceMemory;
     VkDeviceSize maxSharedMemory;
 
-    /// Back buffer count for the Vulkan swap chain.
-    /// Overrides DXGI_SWAP_CHAIN_DESC::BufferCount.
-    int32_t numBackBuffers;
+    /// Enables D3D10 support
+    bool d3d10Enable;
 
-    /// Sync interval. Overrides the value
-    /// passed to IDXGISwapChain::Present.
-    int32_t syncInterval;
+    /// Enables nvapi workaround
+    bool nvapiHack;
   };
   
 }

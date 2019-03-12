@@ -4,11 +4,13 @@
 namespace dxvk {
   
   DxvkDevice::DxvkDevice(
+          std::string               clientApi,
     const Rc<DxvkAdapter>&          adapter,
     const Rc<vk::DeviceFn>&         vkd,
     const DxvkDeviceExtensions&     extensions,
     const DxvkDeviceFeatures&       features)
-  : m_options           (adapter->instance()->config()),
+  : m_clientApi         (clientApi),
+    m_options           (adapter->instance()->options()),
     m_adapter           (adapter),
     m_vkd               (vkd),
     m_extensions        (extensions),
@@ -16,9 +18,11 @@ namespace dxvk {
     m_properties        (adapter->deviceProperties()),
     m_memory            (new DxvkMemoryAllocator    (this)),
     m_renderPassPool    (new DxvkRenderPassPool     (vkd)),
-    m_pipelineManager   (new DxvkPipelineManager    (this)),
+    m_pipelineManager   (new DxvkPipelineManager    (this, m_renderPassPool.ptr())),
     m_metaClearObjects  (new DxvkMetaClearObjects   (vkd)),
+    m_metaCopyObjects   (new DxvkMetaCopyObjects    (vkd)),
     m_metaMipGenObjects (new DxvkMetaMipGenObjects  (vkd)),
+    m_metaPackObjects   (new DxvkMetaPackObjects    (vkd)),
     m_metaResolveObjects(new DxvkMetaResolveObjects (vkd)),
     m_unboundResources  (this),
     m_submissionQueue   (this) {
@@ -42,19 +46,28 @@ namespace dxvk {
   }
 
 
+  VkPipelineStageFlags DxvkDevice::getShaderPipelineStages() const {
+    VkPipelineStageFlags result = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
+                                | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    
+    if (m_features.core.features.geometryShader)
+      result |= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
+    
+    if (m_features.core.features.tessellationShader) {
+      result |= VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT
+             |  VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT;
+    }
+
+    return result;
+  }
+
+
   DxvkDeviceOptions DxvkDevice::options() const {
     DxvkDeviceOptions options;
     options.maxNumDynamicUniformBuffers = m_properties.limits.maxDescriptorSetUniformBuffersDynamic;
     options.maxNumDynamicStorageBuffers = m_properties.limits.maxDescriptorSetStorageBuffersDynamic;
     return options;
-  }
-  
-  
-  Rc<DxvkPhysicalBuffer> DxvkDevice::allocPhysicalBuffer(
-    const DxvkBufferCreateInfo& createInfo,
-          VkMemoryPropertyFlags memoryType) {
-    return new DxvkPhysicalBuffer(m_vkd,
-      createInfo, *m_memory, memoryType);
   }
   
   
@@ -106,11 +119,21 @@ namespace dxvk {
     Rc<DxvkCommandList> cmdList = m_recycledCommandLists.retrieveObject();
     
     if (cmdList == nullptr) {
-      cmdList = new DxvkCommandList(m_vkd,
-        this, m_adapter->graphicsQueueFamily());
+      cmdList = new DxvkCommandList(this,
+        m_adapter->graphicsQueueFamily());
     }
     
     return cmdList;
+  }
+
+
+  Rc<DxvkDescriptorPool> DxvkDevice::createDescriptorPool() {
+    Rc<DxvkDescriptorPool> pool = m_recycledDescriptorPools.retrieveObject();
+
+    if (pool == nullptr)
+      pool = new DxvkDescriptorPool(m_vkd);
+    
+    return pool;
   }
   
   
@@ -118,7 +141,9 @@ namespace dxvk {
     return new DxvkContext(this,
       m_pipelineManager,
       m_metaClearObjects,
+      m_metaCopyObjects,
       m_metaMipGenObjects,
+      m_metaPackObjects,
       m_metaResolveObjects);
   }
   
@@ -141,7 +166,7 @@ namespace dxvk {
   Rc<DxvkBuffer> DxvkDevice::createBuffer(
     const DxvkBufferCreateInfo& createInfo,
           VkMemoryPropertyFlags memoryType) {
-    return new DxvkBuffer(this, createInfo, memoryType);
+    return new DxvkBuffer(this, createInfo, *m_memory, memoryType);
   }
   
   
@@ -172,11 +197,6 @@ namespace dxvk {
   }
   
   
-  Rc<DxvkSemaphore> DxvkDevice::createSemaphore() {
-    return new DxvkSemaphore(m_vkd);
-  }
-  
-  
   Rc<DxvkShader> DxvkDevice::createShader(
           VkShaderStageFlagBits     stage,
           uint32_t                  slotCount,
@@ -184,65 +204,62 @@ namespace dxvk {
     const DxvkInterfaceSlots&       iface,
     const SpirvCodeBuffer&          code) {
     return new DxvkShader(stage,
-      slotCount, slotInfos, iface,
-      code, DxvkShaderConstData());
-  }
-  
-  
-  Rc<DxvkSwapchain> DxvkDevice::createSwapchain(
-    const Rc<DxvkSurface>&          surface,
-    const DxvkSwapchainProperties&  properties) {
-    return new DxvkSwapchain(this, surface, properties);
+      slotCount, slotInfos, iface, code,
+      DxvkShaderOptions(),
+      DxvkShaderConstData());
   }
   
   
   DxvkStatCounters DxvkDevice::getStatCounters() {
     DxvkMemoryStats mem = m_memory->getMemoryStats();
+    DxvkPipelineCount pipe = m_pipelineManager->getPipelineCount();
     
     DxvkStatCounters result;
-    result.setCtr(DxvkStatCounter::MemoryAllocated, mem.memoryAllocated);
-    result.setCtr(DxvkStatCounter::MemoryUsed,      mem.memoryUsed);
+    result.setCtr(DxvkStatCounter::MemoryAllocated,   mem.memoryAllocated);
+    result.setCtr(DxvkStatCounter::MemoryUsed,        mem.memoryUsed);
+    result.setCtr(DxvkStatCounter::PipeCountGraphics, pipe.numGraphicsPipelines);
+    result.setCtr(DxvkStatCounter::PipeCountCompute,  pipe.numComputePipelines);
     
     std::lock_guard<sync::Spinlock> lock(m_statLock);
     result.merge(m_statCounters);
     return result;
+  }
+
+
+  uint32_t DxvkDevice::getCurrentFrameId() const {
+    return m_statCounters.getCtr(DxvkStatCounter::QueuePresentCount);
   }
   
   
   void DxvkDevice::initResources() {
     m_unboundResources.clearResources(this);
   }
-  
-  
-  VkResult DxvkDevice::presentSwapImage(
-    const VkPresentInfoKHR&         presentInfo) {
-    { // Queue submissions are not thread safe
-      std::lock_guard<std::mutex> queueLock(m_submissionLock);
-      std::lock_guard<sync::Spinlock> statLock(m_statLock);
-      
-      m_statCounters.addCtr(DxvkStatCounter::QueuePresentCount, 1);
-      return m_vkd->vkQueuePresentKHR(m_presentQueue.queueHandle, &presentInfo);
-    }
+
+
+  void DxvkDevice::registerShader(const Rc<DxvkShader>& shader) {
+    m_pipelineManager->registerShader(shader);
   }
   
   
+  VkResult DxvkDevice::presentImage(
+    const Rc<vk::Presenter>&        presenter,
+          VkSemaphore               semaphore) {
+    std::lock_guard<std::mutex> queueLock(m_submissionLock);
+    VkResult status = presenter->presentImage(semaphore);
+
+    if (status != VK_SUCCESS)
+      return status;
+    
+    std::lock_guard<sync::Spinlock> statLock(m_statLock);
+    m_statCounters.addCtr(DxvkStatCounter::QueuePresentCount, 1);
+    return status;
+  }
+
+
   void DxvkDevice::submitCommandList(
     const Rc<DxvkCommandList>&      commandList,
-    const Rc<DxvkSemaphore>&        waitSync,
-    const Rc<DxvkSemaphore>&        wakeSync) {
-    VkSemaphore waitSemaphore = VK_NULL_HANDLE;
-    VkSemaphore wakeSemaphore = VK_NULL_HANDLE;
-    
-    if (waitSync != nullptr) {
-      waitSemaphore = waitSync->handle();
-      commandList->trackResource(waitSync);
-    }
-    
-    if (wakeSync != nullptr) {
-      wakeSemaphore = wakeSync->handle();
-      commandList->trackResource(wakeSync);
-    }
-    
+          VkSemaphore               waitSync,
+          VkSemaphore               wakeSync) {
     VkResult status;
     
     { // Queue submissions are not thread safe
@@ -254,7 +271,7 @@ namespace dxvk {
       
       status = commandList->submit(
         m_graphicsQueue.queueHandle,
-        waitSemaphore, wakeSemaphore);
+        waitSync, wakeSync);
     }
     
     if (status == VK_SUCCESS) {
@@ -276,6 +293,11 @@ namespace dxvk {
   
   void DxvkDevice::recycleCommandList(const Rc<DxvkCommandList>& cmdList) {
     m_recycledCommandLists.returnObject(cmdList);
+  }
+  
+
+  void DxvkDevice::recycleDescriptorPool(const Rc<DxvkDescriptorPool>& pool) {
+    m_recycledDescriptorPools.returnObject(pool);
   }
   
 }
